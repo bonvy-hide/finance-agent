@@ -16,7 +16,9 @@ class ChartResponse(BaseModel):
     """
 
 
+
     period: str = Field(..., description="报告期 / 期间")
+    
     title: str = Field("图表", description="图表标题")
     chart_type: str = Field("bar", description="图表类型：bar/line/pie/doughnut")
     labels: List[str] = Field(default_factory=list, description="分类标签")
