@@ -1,140 +1,196 @@
 <!doctype html>
 <html lang="zh">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>资产负债结构分析</title>
-<!-- Tailwind CSS CDN -->
-<script src="https://cdn.tailwindcss.com"></script>
-<!-- Chart.js + datalabels -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
-<!-- Noto Sans -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>资产负债表分析 · 财务报告</title>
+    <!-- Chart.js + datalabels -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+    <!-- Playfair Display (英文衬线标题) + Noto Serif SC (中文衬线) + Noto Sans SC (正文) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Noto+Serif+SC:wght@400;600;700;900&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
-<!-- 顶部导航栏 -->
-<header class="nav-bar">
-    <div class="nav-inner">
-        <div class="nav-brand">
-            <div class="nav-logo">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 3v18h18"/><path d="M7 16V9M12 16V5M17 16v-4"/>
-                </svg>
-            </div>
-            <div>
-                <h1>资产负债结构分析</h1>
-                <p class="nav-desc">上传 Excel 资产负债表，自动生成 16 项分组柱状图</p>
-            </div>
+<!-- 刊头（报头式） -->
+<header class="masthead">
+    <div class="masthead-inner">
+        <div class="masthead-left">
+            <span class="masthead-brand">AURUM</span>
+            <span class="masthead-sep">·</span>
+            <span class="masthead-brand-sub">财务分析周刊</span>
         </div>
-        <div class="nav-status" id="navStatus">
-            <span class="status-dot"></span><span class="status-text">就绪</span>
+        <nav class="masthead-nav">
+            <a class="nav-link active">资产负债表</a>
+            <a class="nav-link">利润分析</a>
+            <a class="nav-link">现金流</a>
+            <a class="nav-link">趋势研究</a>
+        </nav>
+        <div class="masthead-right">
+            <span class="masthead-meta" id="mastheadDate">—</span>
+            <span class="masthead-status" id="mastheadStatus">
+                <span class="status-pulse"></span>
+                <span class="status-label">就绪</span>
+            </span>
         </div>
     </div>
+    <div class="masthead-rule"></div>
 </header>
 
-<main class="container">
-
-    <!-- 上传区 -->
-    <section class="upload-section" id="uploadSection">
-        <div class="dropzone" id="dropzone">
-            <input type="file" id="fileInput" accept=".xlsx" hidden>
-            <div class="dropzone-inner">
-                <div class="dropzone-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
-                    </svg>
-                </div>
-                <p class="dropzone-title">拖拽 Excel 文件到此处</p>
-                <p class="dropzone-hint">或 <span class="link">点击选择文件</span> · 仅支持 .xlsx</p>
-                <div class="file-info" id="fileInfo" hidden>
-                    <div class="file-chip">
-                        <svg class="file-chip-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                            <polyline points="14 2 14 8 20 8"/>
-                        </svg>
-                        <span id="fileName">—</span>
-                    </div>
-                    <button class="btn-primary" id="uploadBtn" disabled>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M5 12h14M12 5l7 7-7 7"/>
-                        </svg>
-                        开始分析
-                    </button>
-                </div>
-            </div>
-            <div class="dropzone-overlay" id="dropOverlay"></div>
+<!-- 报纸标题区 -->
+<section class="hero">
+    <div class="hero-inner">
+        <div class="hero-eyebrow">EXCEL ANALYSIS · 第 <span id="heroEdition">—</span> 期</div>
+        <h1 class="hero-title">资产负债<br>结构分析</h1>
+        <div class="hero-sub">上传企业资产负债表（.xlsx），按 16 项预设规则自动汇总，生成可视化的资产与负债分布报告。</div>
+        <div class="hero-divider"></div>
+        <div class="hero-meta">
+            <span><span class="meta-label">分组</span><span class="meta-value">16 项</span></span>
+            <span><span class="meta-label">单位</span><span class="meta-value">亿元</span></span>
+            <span><span class="meta-label">数据源</span><span class="meta-value">用户上传</span></span>
         </div>
-        <div class="error-box" id="errorBox" hidden></div>
-        <div class="loading-bar" id="loadingBar" hidden>
-            <div class="loading-fill"></div>
-            <span class="loading-text">正在解析数据…</span>
-        </div>
-    </section>
+    </div>
+</section>
 
-    <!-- 结果区 -->
-    <section class="result-section" id="resultSection" hidden>
+<!-- 上传区 -->
+<section class="upload-block">
+    <div class="block-label">
+        <span class="block-num">I</span>
+        <span class="block-title">上传数据</span>
+    </div>
+    <div class="block-rule"></div>
 
-        <!-- 图表卡片 -->
-        <div class="card chart-card">
-            <div class="card-header">
-                <div>
-                    <h2 class="card-title" id="chartTitle">资产负债结构</h2>
-                    <p class="card-sub" id="chartSub"></p>
-                </div>
-                <div class="legend">
-                    <span class="legend-item asset"><i></i>资产侧 (9项)</span>
-                    <span class="legend-item liab"><i></i>负债侧 (7项)</span>
-                </div>
-            </div>
-            <div class="chart-wrap">
-                <canvas id="chartCanvas"></canvas>
-            </div>
-            <div class="chart-footer">
-                单位：亿元 ｜ 共 <strong id="rawCount">0</strong> 条原始科目 ｜ 合计 <strong id="totalVal">0</strong> 亿元
-            </div>
-        </div>
-
-        <!-- 数据表格 -->
-        <div class="tables-grid">
-            <div class="card table-card">
-                <div class="card-header table-header asset-header">
-                    <h3 class="table-title">资产侧</h3>
-                    <span class="table-sum" id="assetSum">0 亿元</span>
-                </div>
-                <div class="table-body" id="assetTable"></div>
-            </div>
-            <div class="card table-card">
-                <div class="card-header table-header liab-header">
-                    <h3 class="table-title">负债侧</h3>
-                    <span class="table-sum" id="liabSum">0 亿元</span>
-                </div>
-                <div class="table-body" id="liabTable"></div>
-            </div>
-        </div>
-
-        <!-- JSON 折叠区 -->
-        <div class="card json-card">
-            <button class="json-toggle" id="jsonToggle">
-                <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="9 18 15 12 9 6"/>
+    <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept=".xlsx" hidden>
+        <div class="dropzone-inner">
+            <div class="dropzone-art">
+                <svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="1">
+                    <rect x="20" y="10" width="40" height="56" rx="2"/>
+                    <line x1="28" y1="22" x2="52" y2="22"/>
+                    <line x1="28" y1="30" x2="52" y2="30"/>
+                    <line x1="28" y1="38" x2="44" y2="38"/>
+                    <circle cx="40" cy="58" r="8"/>
+                    <path d="M40 53 v5 M40 63 v-2 M37 58 h6"/>
                 </svg>
-                <span>原始 JSON 数据</span>
-                <span class="json-hint">点击展开/收起</span>
-            </button>
-            <pre class="json-content" id="jsonContent" hidden></pre>
+            </div>
+            <p class="dropzone-title">拖拽 Excel 文件到此处</p>
+            <p class="dropzone-hint">或 <em class="link">点击此处</em> 选择 · 仅支持 .xlsx 格式</p>
+
+            <div class="file-info" id="fileInfo" hidden>
+                <span class="file-chip" id="fileChip">
+                    <span class="file-chip-name" id="fileName">—</span>
+                </span>
+                <button class="btn-publish" id="uploadBtn" disabled>
+                    <span>发布分析报告</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                    </svg>
+                </button>
+            </div>
         </div>
+    </div>
 
-    </section>
-</main>
+    <div class="error-box" id="errorBox" hidden></div>
+    <div class="loading-line" id="loadingBar" hidden>
+        <span class="loading-text">正在解析数据…</span>
+        <span class="loading-bar"><span class="loading-fill"></span></span>
+    </div>
+</section>
 
-<footer class="footer">
-    <p>Finance Agent · 资产负债表 16 项分组可视化 · 基于 FastAPI + Chart.js</p>
+<!-- 结果区 -->
+<section class="result-block" id="resultSection" hidden>
+
+    <!-- 图表 -->
+    <div class="block-label">
+        <span class="block-num">II</span>
+        <span class="block-title">资产与负债分布</span>
+        <span class="block-meta" id="chartSub">报告期：—</span>
+    </div>
+    <div class="block-rule"></div>
+
+    <div class="chart-card">
+        <div class="chart-frame">
+            <canvas id="chartCanvas"></canvas>
+        </div>
+        <div class="chart-legend">
+            <span class="legend-item">
+                <i class="legend-swatch swatch-asset"></i>
+                <span class="legend-label">资产侧（9 项）</span>
+                <span class="legend-meta" id="assetLegendMeta">— 亿元</span>
+            </span>
+            <span class="legend-divider">·</span>
+            <span class="legend-item">
+                <i class="legend-swatch swatch-liab"></i>
+                <span class="legend-label">负债侧（7 项）</span>
+                <span class="legend-meta" id="liabLegendMeta">— 亿元</span>
+            </span>
+        </div>
+        <div class="chart-caption">
+            单位：亿元 ｜ 共 <strong id="rawCount">0</strong> 条原始科目 ｜ 合计 <strong id="totalVal">0</strong> 亿元
+        </div>
+    </div>
+
+    <!-- 双栏表格 -->
+    <div class="block-label" style="margin-top: 64px;">
+        <span class="block-num">III</span>
+        <span class="block-title">分组明细</span>
+    </div>
+    <div class="block-rule"></div>
+
+    <div class="columns-grid">
+        <div class="column">
+            <div class="column-header">
+                <h3 class="column-title">ASSETS · 资产</h3>
+                <span class="column-sum" id="assetSum">0.00 亿</span>
+            </div>
+            <div class="column-body" id="assetTable"></div>
+        </div>
+        <div class="column-gap"></div>
+        <div class="column">
+            <div class="column-header">
+                <h3 class="column-title">LIABILITIES · 负债</h3>
+                <span class="column-sum" id="liabSum">0.00 亿</span>
+            </div>
+            <div class="column-body" id="liabTable"></div>
+        </div>
+    </div>
+
+    <!-- JSON 折叠区 -->
+    <div class="block-label" style="margin-top: 64px;">
+        <span class="block-num">IV</span>
+        <span class="block-title">附录</span>
+    </div>
+    <div class="block-rule"></div>
+
+    <div class="appendix-card">
+        <button class="appendix-toggle" id="jsonToggle">
+            <span class="appendix-label">原始 JSON 数据</span>
+            <span class="appendix-meta">点击展开/收起</span>
+            <svg class="appendix-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <polyline points="6 9 12 15 18 9"/>
+            </svg>
+        </button>
+        <pre class="appendix-content" id="jsonContent" hidden></pre>
+    </div>
+
+</section>
+
+<!-- 报尾 -->
+<footer class="colophon">
+    <div class="colophon-rule"></div>
+    <div class="colophon-inner">
+        <div class="colophon-left">
+            <span class="colophon-brand">AURUM · 财务分析周刊</span>
+            <span class="colophon-sep">|</span>
+            <span>基于 FastAPI + Chart.js 构建</span>
+        </div>
+        <div class="colophon-right">
+            <span>资产负债表 16 项分组可视化</span>
+        </div>
+    </div>
 </footer>
 
 <script src="/static/app.js"></script>
