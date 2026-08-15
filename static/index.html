@@ -3,10 +3,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>资产负债表分析 · 财务报告</title>
-    <!-- Chart.js + datalabels -->
+    <title>财务图表分析平台 · AURUM</title>
+    <!-- Chart.js + datalabels + zoom（含 hammer 移动端手势） -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/2.0.1/chartjs-plugin-zoom.min.js"></script>
     <!-- Playfair Display (英文衬线标题) + Noto Serif SC (中文衬线) + Noto Sans SC (正文) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,10 +26,10 @@
             <span class="masthead-brand-sub">财务分析周刊</span>
         </div>
         <nav class="masthead-nav">
-            <a class="nav-link active">资产负债表</a>
-            <a class="nav-link">利润分析</a>
-            <a class="nav-link">现金流</a>
+            <a class="nav-link" data-page="bs">资产负债表</a>
+            <a class="nav-link active" data-page="stock">个股财报</a>
             <a class="nav-link">趋势研究</a>
+            <a class="nav-link">现金流</a>
         </nav>
         <div class="masthead-right">
             <span class="masthead-meta" id="mastheadDate">—</span>
@@ -40,12 +42,209 @@
     <div class="masthead-rule"></div>
 </header>
 
+<!-- ============ 页面容器：个股财报 ============ -->
+<div id="page-stock" class="page-container">
+
 <!-- 报纸标题区 -->
 <section class="hero">
     <div class="hero-inner">
-        <div class="hero-eyebrow">EXCEL ANALYSIS · 第 <span id="heroEdition">—</span> 期</div>
+        <div class="hero-eyebrow">STOCK FINANCIAL · 第 <span id="heroEdition">—</span> 期</div>
+        <h1 class="hero-title">个股财报<br>多维分析</h1>
+        <div class="hero-sub">上传个股财报原始数据（.xls，diy_report 模板），输入公司名称，系统自动标准化并生成 6 张业务图表：营收趋势、净利润分析、成本毛利率、三费用对比、应付账款、研发投入。</div>
+        <div class="hero-divider"></div>
+        <div class="hero-meta">
+            <span><span class="meta-label">图表</span><span class="meta-value">6 张</span></span>
+            <span><span class="meta-label">单位</span><span class="meta-value">亿元</span></span>
+            <span><span class="meta-label">数据源</span><span class="meta-value">用户上传</span></span>
+        </div>
+    </div>
+</section>
+
+<!-- 上传区 -->
+<section class="upload-block">
+    <div class="block-label">
+        <span class="block-num">I</span>
+        <span class="block-title">上传财报数据</span>
+    </div>
+    <div class="block-rule"></div>
+
+    <div class="dropzone" id="dropzone">
+        <input type="file" id="fileInput" accept=".xls" hidden>
+        <div class="dropzone-inner">
+            <div class="dropzone-art">
+                <svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="1">
+                    <rect x="20" y="10" width="40" height="56" rx="2"/>
+                    <line x1="28" y1="22" x2="52" y2="22"/>
+                    <line x1="28" y1="30" x2="52" y2="30"/>
+                    <line x1="28" y1="38" x2="44" y2="38"/>
+                    <circle cx="40" cy="58" r="8"/>
+                    <path d="M40 53 v5 M40 63 v-2 M37 58 h6"/>
+                </svg>
+            </div>
+            <p class="dropzone-title">拖拽 .xls 财报文件到此处</p>
+            <p class="dropzone-hint">或 <em class="link">点击此处</em> 选择 · 仅支持 .xls（diy_report 模板）</p>
+
+            <div class="upload-controls" id="uploadControls">
+                <div class="company-input-wrap">
+                    <label class="company-label" for="companyInput">公司名称</label>
+                    <input type="text" id="companyInput" class="company-input" placeholder="如：贵州茅台、宁德时代" maxlength="30">
+                </div>
+                <div class="file-info" id="fileInfo" hidden>
+                    <span class="file-chip" id="fileChip">
+                        <span class="file-chip-name" id="fileName">—</span>
+                    </span>
+                    <button class="btn-publish" id="uploadBtn" disabled>
+                        <span>生成分析报告</span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="error-box" id="errorBox" hidden></div>
+    <div class="loading-line" id="loadingBar" hidden>
+        <span class="loading-text">正在解析数据并生成图表…</span>
+        <span class="loading-bar"><span class="loading-fill"></span></span>
+    </div>
+</section>
+
+<!-- 结果区：6 个业务图表 -->
+<section class="result-block" id="resultSection" hidden>
+
+    <div class="block-label">
+        <span class="block-num">II</span>
+        <span class="block-title">业务图表分析</span>
+        <span class="block-meta" id="chartSub">报告期：—</span>
+    </div>
+    <div class="block-rule"></div>
+
+    <!-- 图表网格：6 个独立卡片 -->
+    <div class="charts-grid" id="chartsGrid">
+        <div class="chart-card stock-chart-card" data-chart="revenue-cashflow">
+            <div class="chart-card-header">
+                <h3 class="chart-card-title" id="title-revenue-cashflow">—</h3>
+                <span class="chart-card-type" id="type-revenue-cashflow">折线图</span>
+            </div>
+            <div class="chart-frame">
+                <canvas id="canvas-revenue-cashflow"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-card stock-chart-card" data-chart="profit-cashflow-fcf">
+            <div class="chart-card-header">
+                <h3 class="chart-card-title" id="title-profit-cashflow-fcf">—</h3>
+                <span class="chart-card-type" id="type-profit-cashflow-fcf">折线图</span>
+            </div>
+            <div class="chart-frame">
+                <canvas id="canvas-profit-cashflow-fcf"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-card stock-chart-card" data-chart="cost-margin">
+            <div class="chart-card-header">
+                <h3 class="chart-card-title" id="title-cost-margin">—</h3>
+                <span class="chart-card-type" id="type-cost-margin">柱+折线</span>
+            </div>
+            <div class="chart-frame">
+                <canvas id="canvas-cost-margin"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-card stock-chart-card" data-chart="three-expenses">
+            <div class="chart-card-header">
+                <h3 class="chart-card-title" id="title-three-expenses">—</h3>
+                <span class="chart-card-type" id="type-three-expenses">柱+折线</span>
+            </div>
+            <div class="chart-frame">
+                <canvas id="canvas-three-expenses"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-card stock-chart-card" data-chart="revenue-payable">
+            <div class="chart-card-header">
+                <h3 class="chart-card-title" id="title-revenue-payable">—</h3>
+                <span class="chart-card-type" id="type-revenue-payable">柱+折线</span>
+            </div>
+            <div class="chart-frame">
+                <canvas id="canvas-revenue-payable"></canvas>
+            </div>
+        </div>
+
+        <div class="chart-card stock-chart-card" data-chart="rd-profit">
+            <div class="chart-card-header">
+                <h3 class="chart-card-title" id="title-rd-profit">—</h3>
+                <span class="chart-card-type" id="type-rd-profit">柱+折线</span>
+            </div>
+            <div class="chart-frame">
+                <canvas id="canvas-rd-profit"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据摘要 -->
+    <div class="block-label" style="margin-top: 64px;">
+        <span class="block-num">III</span>
+        <span class="block-title">数据摘要</span>
+    </div>
+    <div class="block-rule"></div>
+
+    <div class="summary-grid" id="summaryGrid">
+        <div class="summary-item">
+            <span class="summary-label">公司</span>
+            <span class="summary-value" id="sumCompany">—</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">报告期数</span>
+            <span class="summary-value" id="sumPeriods">—</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">时间范围</span>
+            <span class="summary-value" id="sumRange">—</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">列数</span>
+            <span class="summary-value" id="sumColumns">—</span>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">来源文件</span>
+            <span class="summary-value" id="sumSource">—</span>
+        </div>
+    </div>
+
+    <!-- JSON 折叠区 -->
+    <div class="block-label" style="margin-top: 64px;">
+        <span class="block-num">IV</span>
+        <span class="block-title">附录</span>
+    </div>
+    <div class="block-rule"></div>
+
+    <div class="appendix-card">
+        <button class="appendix-toggle" id="jsonToggle">
+            <span class="appendix-label">标准化数据 JSON</span>
+            <span class="appendix-meta">点击展开/收起</span>
+            <svg class="appendix-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <polyline points="6 9 12 15 18 9"/>
+            </svg>
+        </button>
+        <pre class="appendix-content" id="jsonContent" hidden></pre>
+    </div>
+
+</section>
+
+</div><!-- /#page-stock -->
+
+<!-- ============ 页面容器：资产负债表 ============ -->
+<div id="page-bs" class="page-container" hidden>
+
+<!-- 报纸标题区 -->
+<section class="hero">
+    <div class="hero-inner">
+        <div class="hero-eyebrow">EXCEL ANALYSIS · 第 <span id="heroEditionBs">—</span> 期</div>
         <h1 class="hero-title">资产负债<br>结构分析</h1>
-        <div class="hero-sub">上传企业资产负债表（.xlsx），按 16 项预设规则自动汇总，生成可视化的资产与负债分布报告。</div>
+        <div class="hero-sub">上传企业资产负债表（.xls / .xlsx），按 16 项预设规则自动汇总，生成可视化的资产与负债分布报告。</div>
         <div class="hero-divider"></div>
         <div class="hero-meta">
             <span><span class="meta-label">分组</span><span class="meta-value">16 项</span></span>
@@ -63,8 +262,8 @@
     </div>
     <div class="block-rule"></div>
 
-    <div class="dropzone" id="dropzone">
-        <input type="file" id="fileInput" accept=".xlsx" hidden>
+    <div class="dropzone" id="dropzoneBs">
+        <input type="file" id="fileInputBs" accept=".xls,.xlsx" hidden>
         <div class="dropzone-inner">
             <div class="dropzone-art">
                 <svg viewBox="0 0 80 80" fill="none" stroke="currentColor" stroke-width="1">
@@ -77,13 +276,13 @@
                 </svg>
             </div>
             <p class="dropzone-title">拖拽 Excel 文件到此处</p>
-            <p class="dropzone-hint">或 <em class="link">点击此处</em> 选择 · 仅支持 .xlsx 格式</p>
+            <p class="dropzone-hint">或 <em class="link">点击此处</em> 选择 · 仅支持 .xls / .xlsx 格式</p>
 
-            <div class="file-info" id="fileInfo" hidden>
-                <span class="file-chip" id="fileChip">
-                    <span class="file-chip-name" id="fileName">—</span>
+            <div class="file-info" id="fileInfoBs" hidden>
+                <span class="file-chip" id="fileChipBs">
+                    <span class="file-chip-name" id="fileNameBs">—</span>
                 </span>
-                <button class="btn-publish" id="uploadBtn" disabled>
+                <button class="btn-publish" id="uploadBtnBs" disabled>
                     <span>发布分析报告</span>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                         <path d="M5 12h14M12 5l7 7-7 7"/>
@@ -93,27 +292,27 @@
         </div>
     </div>
 
-    <div class="error-box" id="errorBox" hidden></div>
-    <div class="loading-line" id="loadingBar" hidden>
+    <div class="error-box" id="errorBoxBs" hidden></div>
+    <div class="loading-line" id="loadingBarBs" hidden>
         <span class="loading-text">正在解析数据…</span>
         <span class="loading-bar"><span class="loading-fill"></span></span>
     </div>
 </section>
 
 <!-- 结果区 -->
-<section class="result-block" id="resultSection" hidden>
+<section class="result-block" id="resultSectionBs" hidden>
 
     <!-- 图表 -->
     <div class="block-label">
         <span class="block-num">II</span>
         <span class="block-title">资产与负债分布</span>
-        <span class="block-meta" id="chartSub">报告期：—</span>
+        <span class="block-meta" id="chartSubBs">报告期：—</span>
     </div>
     <div class="block-rule"></div>
 
     <div class="chart-card">
         <div class="chart-frame">
-            <canvas id="chartCanvas"></canvas>
+            <canvas id="chartCanvasBs"></canvas>
         </div>
         <div class="chart-legend">
             <span class="legend-item">
@@ -166,17 +365,19 @@
     <div class="block-rule"></div>
 
     <div class="appendix-card">
-        <button class="appendix-toggle" id="jsonToggle">
+        <button class="appendix-toggle" id="jsonToggleBs">
             <span class="appendix-label">原始 JSON 数据</span>
             <span class="appendix-meta">点击展开/收起</span>
             <svg class="appendix-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <polyline points="6 9 12 15 18 9"/>
             </svg>
         </button>
-        <pre class="appendix-content" id="jsonContent" hidden></pre>
+        <pre class="appendix-content" id="jsonContentBs" hidden></pre>
     </div>
 
 </section>
+
+</div><!-- /#page-bs -->
 
 <!-- 报尾 -->
 <footer class="colophon">
@@ -188,11 +389,39 @@
             <span>基于 FastAPI + Chart.js 构建</span>
         </div>
         <div class="colophon-right">
-            <span>资产负债表 16 项分组可视化</span>
+            <span>财务图表多维分析平台</span>
         </div>
     </div>
 </footer>
 
+<!-- 全屏放大覆盖层 -->
+<div class="chart-fullscreen-overlay" id="fullscreenOverlay" hidden>
+    <div class="fullscreen-header">
+        <h3 class="fullscreen-title" id="fullscreenTitle">—</h3>
+        <div class="fullscreen-controls">
+            <button class="fullscreen-btn" id="btnResetZoom" title="重置缩放">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M3 12a9 9 0 1 0 9-9"/>
+                    <polyline points="3 4 3 12 11 12"/>
+                </svg>
+                <span>重置</span>
+            </button>
+            <button class="fullscreen-btn fullscreen-close" id="btnCloseFullscreen" title="关闭（ESC）">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+                <span>关闭</span>
+            </button>
+        </div>
+    </div>
+    <div class="fullscreen-canvas-wrap">
+        <canvas id="fullscreenCanvas"></canvas>
+    </div>
+    <div class="fullscreen-hint">滚轮缩放 ｜ 拖动平移 ｜ ESC 退出</div>
+</div>
+
 <script src="/static/app.js"></script>
+<script src="/static/bs_chart.js"></script>
 </body>
 </html>

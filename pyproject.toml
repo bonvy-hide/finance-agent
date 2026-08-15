@@ -10,4 +10,10 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "python-multipart>=0.0.12",
+    "xlrd>=2.0.2",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
 ]

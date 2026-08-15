@@ -21,7 +21,12 @@ from typing import Any
 try:
     import openpyxl
 except ImportError:
-    sys.exit("缺少依赖：pip install openpyxl")
+    openpyxl = None  # type: ignore[assignment]
+
+try:
+    import xlrd
+except ImportError:
+    xlrd = None  # type: ignore[assignment]
 
 try:
     import matplotlib
@@ -82,50 +87,141 @@ def parse_num(v: Any) -> float:
 #  2. Excel 读取（找行项目列 + 数值列）
 # ──────────────────────────────────────────────────────────────────
 
+def _is_date_header(s: str) -> bool:
+    """判断表头单元格是否为日期格式（如 2026-03-31 / 2026年12月31日 / 2026/3/31）"""
+    if not s:
+        return False
+    t = str(s)
+    return bool(re.search(r"\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}", t)) or \
+           bool(re.search(r"\d{4}[-/.年]\d{1,2}", t))
+
+
+def _parse_period(s) -> str:
+    """把表头日期统一成 YYYY-MM-DD 字符串，用于排序和展示。"""
+    if not s:
+        return ""
+    t = str(s).strip()
+    m = re.match(r"(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2}))?", t)
+    if not m:
+        return t
+    y, mo, d = m.group(1), int(m.group(2)), m.group(3)
+    if d is None:
+        # 仅有年月时按月末补全
+        last_day = {1:31,2:28,3:31,4:30,5:31,6:30,7:31,8:31,9:30,10:31,11:30,12:31}
+        d = last_day.get(mo, 30)
+        if mo == 2 and int(y) % 4 == 0 and (int(y) % 100 != 0 or int(y) % 400 == 0):
+            d = 29
+    return f"{y}-{mo:02d}-{int(d):02d}"
+
+
 def read_bs(path: Path, unit_hint: str = "auto") -> dict:
     """
+    读取资产负债表 Excel，自动选取最新报告期。
+
+    支持两种文件格式：
+      - .xls  → xlrd（含 ignore_workbook_corruption 兼容 OLE2 误报）
+      - .xlsx → openpyxl
+
+    多报告期文件（表头含多列日期）时，按日期排序取最新一列作为数值列。
+    单列文件（仅一列日期或仅一列数值）时，取该列。
+
     返回：
-      { "公司": ..., "报告期": ..., "rows": [(原始字段名, 数值)] }
+      { "报告期": "YYYY-MM-DD", "rows": [(原始字段名, 清洗后字段名, 数值)] }
     数值单位已统一为「元」。字段名用清洗后形式作为 key。
     """
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb.active
+    suffix = path.suffix.lower()
+    if suffix == ".xls":
+        if xlrd is None:
+            sys.exit("缺少依赖：pip install xlrd")
+        wb = xlrd.open_workbook(str(path), formatting_info=False,
+                                ignore_workbook_corruption=True)
+        ws = wb.sheet_by_index(0)
+        nrows, ncols = ws.nrows, ws.ncols
+        def cell_value(r: int, c: int):
+            if r >= nrows or c >= ncols:
+                return None
+            return ws.cell_value(r, c)
+        data_rows = nrows
+    else:
+        if openpyxl is None:
+            sys.exit("缺少依赖：pip install openpyxl")
+        wb = openpyxl.load_workbook(path, data_only=True)
+        ws = wb.active
+        _all = list(ws.iter_rows(min_row=1, values_only=True))
+        nrows = len(_all)
+        ncols = ws.max_column or (len(_all[0]) if _all else 0)
+        def cell_value(r: int, c: int):
+            if r >= nrows or c >= ncols:
+                return None
+            return _all[r][c]
+        data_rows = nrows
 
-    # 找"科目"列（首列）和"数值"列（首行/末行表头含日期的列）
-    # 简单策略：使用第一列作字段列，第一行第一个非空单元格往后找含日期的列
-    header = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    label_col = 0  # 默认 A 列
-    value_col = 1  # 默认 B 列
-
-    # 探测含日期的数值列
-    for i, h in enumerate(header[1:], start=1):
-        if h and any(t in str(h) for t in ["-", "/", "年", "月"]):
-            value_col = i
+    # 自动探测表头行：跳过开头全空行，找到第一个「首列非空 且 含至少一个日期表头」的行
+    header_row = 0
+    for r in range(min(5, data_rows)):
+        first_cell = cell_value(r, 0)
+        if first_cell is None or str(first_cell).strip() == "":
+            continue
+        # 检查该行是否有日期型表头
+        has_date = any(
+            _is_date_header(str(cell_value(r, j) or ""))
+            for j in range(1, ncols)
+        )
+        if has_date:
+            header_row = r
             break
+    else:
+        # 兜底：找第一个非空行作为表头
+        for r in range(min(5, data_rows)):
+            if cell_value(r, 0) not in (None, ""):
+                header_row = r
+                break
+
+    header = [cell_value(header_row, j) for j in range(ncols)]
+    data_start = header_row + 1
+
+    # 科目列：默认第 0 列
+    label_col = 0
+
+    # 找所有「日期型」表头列，按日期排序取最新
+    date_cols = []  # [(parsed_period, col_index, raw_header)]
+    for j, h in enumerate(header):
+        if j == label_col:
+            continue
+        if h and _is_date_header(str(h)):
+            date_cols.append((_parse_period(h), j, str(h)))
+
+    if date_cols:
+        # 按解析后的日期字符串降序，取最新
+        date_cols.sort(key=lambda x: x[0], reverse=True)
+        value_col = date_cols[0][1]
+        period_str = date_cols[0][0]
+    else:
+        # 兜底：没有日期表头时，取第一个非空、非科目列的列
+        value_col = 1 if ncols > 1 else 0
+        period_str = str(header[value_col]) if value_col < ncols else ""
 
     # 单位推断
-    sample = next((ws.cell(row=r, column=value_col + 1).value
-                   for r in range(2, 8)), None)
     if unit_hint == "auto":
-        # 若数值总规模 > 1e6 视作元
         unit_hint = "元"
     unit_div = {"元": 1.0, "万元": 1e4, "亿元": 1e8}.get(unit_hint, 1.0)
 
     rows = []
-    period = header[value_col] if value_col < len(header) else None
-    period_str = str(period) if period else ""
     SKIP_PREFIX = ("其中", "其中：", "减:", "减：", "加:", "加：")
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row or row[label_col] is None: continue
-        raw_label = str(row[label_col]).strip()
+    for r in range(data_start, data_rows):
+        raw_label = cell_value(r, label_col)
+        if raw_label is None or str(raw_label).strip() == "":
+            continue
+        raw_label = str(raw_label).strip()
         # 跳过"其中..."(子明细)与"减..."等附注行 — 这些会与合计行重复计入
         if any(raw_label.startswith(p) for p in SKIP_PREFIX):
             continue
-        # 跳过明显的小节标题（值在第二列为 None）
-        val = row[value_col] if value_col < len(row) else None
-        if val is None: continue
+        val = cell_value(r, value_col)
+        if val is None or str(val).strip() == "":
+            continue
         v = parse_num(val)
-        if v == 0: continue
+        if v == 0:
+            continue
         rows.append((raw_label, norm(raw_label), v * unit_div))
 
     return {"报告期": period_str, "rows": rows}
@@ -310,7 +406,7 @@ def render_png(values: dict, period: str, out: Path,
 
 def main():
     p = argparse.ArgumentParser(description="资产负债表 → 16 项分组柱状图")
-    p.add_argument("input", help="Excel 文件路径（.xlsx）")
+    p.add_argument("input", help="Excel 文件路径（.xls / .xlsx）")
     p.add_argument("-o", "--output-dir", default=".", help="输出目录（默认当前目录）")
     p.add_argument("--period", default=None, help="覆盖报告期显示文本")
     p.add_argument("--title", default="资产负债结构", help="图表标题")
