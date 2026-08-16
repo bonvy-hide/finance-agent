@@ -56,12 +56,16 @@ try:
         assert "资产负债" in html
         print(f"    [OK] 首页返回 {len(html)} 字节")
 
-    # 4. 测试静态文件
-    print("\n[4] 测试 GET /static/app.js ...")
+    # 4. 测试静态文件（app.js 调 /api/normalize，bs_chart.js 调 /api/bs-chart）
+    print("\n[4] 测试 GET /static/app.js, /static/bs_chart.js ...")
     with urllib.request.urlopen("http://127.0.0.1:8765/static/app.js", timeout=5) as r:
         js = r.read().decode("utf-8")
-        assert "/api/bs-chart" in js
-        print(f"    [OK] app.js 返回 {len(js)} 字节，包含新 API 路径")
+        assert "/api/normalize" in js
+        print(f"    [OK] app.js 返回 {len(js)} 字节，包含 /api/normalize")
+    with urllib.request.urlopen("http://127.0.0.1:8765/static/bs_chart.js", timeout=5) as r:
+        js_bs = r.read().decode("utf-8")
+        assert "/api/bs-chart" in js_bs
+        print(f"    [OK] bs_chart.js 返回 {len(js_bs)} 字节，包含 /api/bs-chart")
 
     # 5. 测试 API
     print("\n[5] 测试 POST /api/bs-chart ...")
@@ -106,6 +110,35 @@ try:
     idx = result["labels"].index("总现金")
     assert abs(result["values"][idx] - 100.0) < 0.01, f"总现金应为100亿, got {result['values'][idx]}"
     print("\n    [OK] 所有断言通过！")
+
+    # 6. 测试同花顺在线获取（真实外部请求,受全局限流,约 6~10 秒）
+    print("\n[6] 测试 POST /api/fetch-all?code=688008 ...")
+    req2 = urllib.request.Request(
+        "http://127.0.0.1:8765/api/fetch-all?code=688008", method="POST"
+    )
+    with urllib.request.urlopen(req2, timeout=60) as r:
+        fa = json.loads(r.read().decode("utf-8"))
+
+    print(f"    company_name: {fa.get('company_name')}")
+    print(f"    stock 期数: {len(fa['stock']['periods'])}")
+    print(f"    bs period: {fa['bs']['period']}, labels: {len(fa['bs']['labels'])}")
+    assert fa["company_name"] == "澜起科技", f"公司名应为澜起科技, got {fa['company_name']}"
+    assert len(fa["stock"]["periods"]) >= 30, "个股财报期数异常"
+    assert len(fa["bs"]["labels"]) == 16, "资产负债表应为 16 项分组"
+    assert fa["bs"]["extra"]["asset_count"] == 9
+    print("\n    [OK] fetch-all 断言通过！")
+
+    # 7. 非法代码校验
+    print("\n[7] 测试 POST /api/fetch-all?code=abc (应 400) ...")
+    try:
+        req3 = urllib.request.Request(
+            "http://127.0.0.1:8765/api/fetch-all?code=abc", method="POST"
+        )
+        urllib.request.urlopen(req3, timeout=10)
+        raise AssertionError("非法代码应返回 400")
+    except urllib.error.HTTPError as e:
+        assert e.code == 400, f"预期 400, got {e.code}"
+        print("    [OK] 非法代码返回 400")
 
     print("\n" + "=" * 60)
     print("[OK] 重构验证全部通过！")

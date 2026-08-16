@@ -1,159 +1,172 @@
 /* ============================================
-   个股财报多维分析 — 前端逻辑（经典金融报告风）
-   上传 .xls + 公司名 → 并发请求 6 个图表 → 渲染
+   财务图表分析平台 — 前端逻辑（风格无关版）
+   两种数据入口：
+   1. 在线获取：POST /api/fetch-all?code=xxxxxx，
+      一次返回个股财报标准化数据与资产负债结构两套结果；
+   2. 手动上传（统一单表单）：公司名 + 两个文件格，
+      POST /api/bs-chart（资产负债表）与 POST /api/normalize（个股 .xls），
+      选了哪个文件就生成哪套图表。
+   配色与字体从 index.html 的 APP_THEME 读取。
    ============================================ */
 
 (function () {
     'use strict';
 
+    var T = window.APP_THEME; // 主题常量：由 index.html 在本脚本之前定义
+
     // ── DOM 引用 ──────────────────────────────
-    const dropzone = document.getElementById('dropzone');
-    const fileInput = document.getElementById('fileInput');
-    const companyInput = document.getElementById('companyInput');
-    const fileInfo = document.getElementById('fileInfo');
-    const fileName = document.getElementById('fileName');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const errorBox = document.getElementById('errorBox');
-    const loadingBar = document.getElementById('loadingBar');
+    // 手动上传统一表单（公司名 + 两个文件格 + 生成按钮）
+    var manualForm = document.getElementById('manualForm');
+    var manualCompany = document.getElementById('manualCompany');
+    var manualGenBtn = document.getElementById('manualGenBtn');
+    var manualGenText = document.getElementById('manualGenText');
+    var errorBoxManual = document.getElementById('errorBoxManual');
+    var loadingBarManual = document.getElementById('loadingBarManual');
 
-    const mastheadDate = document.getElementById('mastheadDate');
-    const heroEdition = document.getElementById('heroEdition');
-    const mastheadStatus = document.getElementById('mastheadStatus');
-    const statusLabel = mastheadStatus.querySelector('.status-label');
+    var mastheadStatus = document.getElementById('mastheadStatus');
+    var statusLabel = mastheadStatus ? mastheadStatus.querySelector('.status-label') : null;
 
-    const resultSection = document.getElementById('resultSection');
-    const chartSub = document.getElementById('chartSub');
-    const jsonToggle = document.getElementById('jsonToggle');
-    const jsonContent = document.getElementById('jsonContent');
+    var resultSection = document.getElementById('resultSection');
+    var resultSectionBs = document.getElementById('resultSectionBs');
+    var entryCard = document.querySelector('.entry-card');
 
-    // 数据摘要
-    const sumCompany = document.getElementById('sumCompany');
-    const sumPeriods = document.getElementById('sumPeriods');
-    const sumRange = document.getElementById('sumRange');
-    const sumColumns = document.getElementById('sumColumns');
-    const sumSource = document.getElementById('sumSource');
+    // ── 模式独立结果仓库 ───────────────────────
+    // 两个 tab 各自保存图表原始数据：切换 tab 时按目标模式的数据重渲染，
+    // 互不覆盖丢失；只有点该 tab 的「清除」按钮才丢弃数据并复位表单。
+    var currentMode = 'online';
+    var modeData = {
+        online: { bs: null, bsCompany: '', stock: null },  // bs: ChartResponse；stock: NormalizeResponse
+        manual: { bs: null, bsCompany: '', stock: null }
+    };
 
-    let currentFile = null;
-    // 6 个 Chart 实例，按 chart_name 索引
-    const chartInstances = {};
-    // 6 个图表的原始数据，用于全屏重建
-    const chartDataCache = {};
-    // 全屏 Chart 实例
-    let fullscreenChart = null;
+    function emptyModeState() {
+        return { bs: null, bsCompany: '', stock: null };
+    }
+    var chartSub = document.getElementById('chartSub');
+    var jsonToggle = document.getElementById('jsonToggle');
+    var jsonContent = document.getElementById('jsonContent');
 
-    // ── DOM：全屏覆盖层 ──────────────────────
-    const fullscreenOverlay = document.getElementById('fullscreenOverlay');
-    const fullscreenCanvas = document.getElementById('fullscreenCanvas');
-    const fullscreenTitle = document.getElementById('fullscreenTitle');
-    const btnCloseFullscreen = document.getElementById('btnCloseFullscreen');
-    const btnResetZoom = document.getElementById('btnResetZoom');
+    var sumCompany = document.getElementById('sumCompany');
+    var sumPeriods = document.getElementById('sumPeriods');
+    var sumRange = document.getElementById('sumRange');
+    var sumColumns = document.getElementById('sumColumns');
+    var sumSource = document.getElementById('sumSource');
 
-    // ── 6 个图表配置（路由名 → 显示信息）─────
-    const CHART_DEFS = [
-        { name: 'revenue-cashflow',    typeLabel: '折线图' },
-        { name: 'profit-cashflow-fcf', typeLabel: '折线图' },
-        { name: 'cost-margin',         typeLabel: '柱+折线' },
-        { name: 'three-expenses',      typeLabel: '柱+折线' },
-        { name: 'revenue-payable',     typeLabel: '柱+折线' },
-        { name: 'rd-profit',           typeLabel: '柱+折线' },
+    var bsFile = null;         // 手动上传：已选资产负债表文件
+    var stockFile = null;      // 手动上传：已选个股财报文件
+    var chartInstances = {};   // 6 个 Chart 实例，按 chart_name 索引
+    var chartDataCache = {};   // 原始数据缓存，用于全屏重建
+    var fullscreenChart = null;
+
+    var fullscreenOverlay = document.getElementById('fullscreenOverlay');
+    var fullscreenCanvas = document.getElementById('fullscreenCanvas');
+    var fullscreenTitle = document.getElementById('fullscreenTitle');
+    var btnCloseFullscreen = document.getElementById('btnCloseFullscreen');
+    var btnResetZoom = document.getElementById('btnResetZoom');
+
+    var CHART_DEFS = [
+        { name: 'revenue-cashflow' },
+        { name: 'profit-cashflow-fcf' },
+        { name: 'cost-margin' },
+        { name: 'three-expenses' },
+        { name: 'revenue-payable' },
+        { name: 'rd-profit' }
     ];
 
-    // ── 初始化刊头日期/期数 ──────────────────
-    (function initHeader() {
-        const d = new Date();
-        const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()];
-        mastheadDate.textContent = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 · ${weekday}`;
-        heroEdition.textContent = Math.floor((Date.now() - Date.UTC(2024, 0, 1)) / (7 * 24 * 60 * 60 * 1000));
-    })();
+    // ── 入口模式切换（在线获取 / 手动上传）──────
+    var modeTabs = document.querySelectorAll('.mode-tab[data-mode]');
+    var panelOnline = document.getElementById('modeOnline');
+    var panelManual = document.getElementById('modeManual');
 
-    // ── 菜单切换（单页模式，不刷新页面以保留数据）─────
-    const pageStock = document.getElementById('page-stock');
-    const pageBs = document.getElementById('page-bs');
-    const navLinks = document.querySelectorAll('.masthead-nav .nav-link[data-page]');
+    // 切换 tab：按目标模式保存的数据重渲染结果区（图表不丢失），
+    // 有结果定位到首个结果区，无结果回到入口表单
+    function switchToMode(mode) {
+        currentMode = mode;
+        panelOnline.hidden = mode !== 'online';
+        panelManual.hidden = mode !== 'manual';
 
-    navLinks.forEach(function (link) {
-        link.addEventListener('click', function (e) {
-            e.preventDefault();
-            var targetPage = link.getAttribute('data-page');
-            if (!targetPage) return;
+        var state = modeData[mode];
+        if (state.bs && window.renderBsResult) window.renderBsResult(state.bs, true, state.bsCompany);
+        if (state.stock) {
+            renderAllCharts(state.stock, true);
+            renderSummary(state.stock);
+        }
+        resultSectionBs.hidden = !state.bs;
+        resultSection.hidden = !state.stock;
 
-            // 切换 page-container 显示
-            if (targetPage === 'stock') {
-                pageStock.hidden = false;
-                pageBs.hidden = true;
-            } else if (targetPage === 'bs') {
-                pageStock.hidden = true;
-                pageBs.hidden = false;
-            }
+        var target = state.bs ? resultSectionBs : (state.stock ? resultSection : entryCard);
+        setTimeout(function () {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+    }
 
-            // 切换菜单 active 高亮
-            navLinks.forEach(function (l) { l.classList.remove('active'); });
-            link.classList.add('active');
-
-            // 滚动到顶部
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+    modeTabs.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            modeTabs.forEach(function (b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            switchToMode(btn.getAttribute('data-mode'));
         });
     });
 
-    // ── 状态切换 ──────────────────────────────
+    // ── 状态 / 错误 ───────────────────────────
     function setStatus(state, text) {
-        mastheadStatus.className = 'masthead-status' + (state ? ' ' + state : '');
+        if (!mastheadStatus || !statusLabel) return;
+        mastheadStatus.className = 'status' + (state ? ' ' + state : '');
         statusLabel.textContent = text;
     }
 
-    function showError(msg) {
-        errorBox.hidden = false;
-        errorBox.textContent = '⚠ ' + msg;
+    function showErrorManual(msg) {
+        errorBoxManual.hidden = false;
+        errorBoxManual.textContent = '⚠ ' + msg;
         setStatus('error', '错误');
     }
 
-    function clearError() {
-        errorBox.hidden = true;
+    function clearErrorManual() { errorBoxManual.hidden = true; }
+
+    // ── 手动上传：文件格（点击选择 / 拖拽 / 清除）──
+    var slotConfig = [
+        {
+            key: 'bs', label: '资产负债表', accept: ['.xls', '.xlsx'], acceptText: '.xls / .xlsx',
+            slot: document.getElementById('fileSlotBs'),
+            input: document.getElementById('fileInputBs'),
+            hint: document.getElementById('slotHintBs'),
+            fileBar: document.getElementById('slotFileBs'),
+            nameEl: document.getElementById('slotNameBs'),
+            clearBtn: document.getElementById('slotClearBs')
+        },
+        {
+            key: 'stock', label: '个股财报', accept: ['.xls'], acceptText: '.xls（diy_report 模板）',
+            slot: document.getElementById('fileSlot'),
+            input: document.getElementById('fileInput'),
+            hint: document.getElementById('slotHint'),
+            fileBar: document.getElementById('slotFile'),
+            nameEl: document.getElementById('slotName'),
+            clearBtn: document.getElementById('slotClear')
+        }
+    ];
+
+    function getSlotFile(cfg) { return cfg.key === 'bs' ? bsFile : stockFile; }
+
+    function setSlotFile(cfg, file) {
+        if (cfg.key === 'bs') bsFile = file; else stockFile = file;
+        if (file) {
+            cfg.slot.classList.add('filled');
+            cfg.fileBar.hidden = false;
+            cfg.hint.hidden = true;
+            cfg.nameEl.textContent = file.name + ' · ' + formatSize(file.size);
+        } else {
+            cfg.slot.classList.remove('filled');
+            cfg.fileBar.hidden = true;
+            cfg.hint.hidden = false;
+            cfg.input.value = '';   // 允许重复选择同一个文件
+        }
+        updateGenState();
     }
 
-    // ── 文件选择 ──────────────────────────────
-    dropzone.addEventListener('click', function (e) {
-        if (e.target.closest('#uploadBtn') || e.target.closest('#companyInput')) return;
-        fileInput.click();
-    });
-
-    fileInput.addEventListener('change', function (e) {
-        if (e.target.files.length > 0) handleFile(e.target.files[0]);
-    });
-
-    ['dragenter', 'dragover'].forEach(function (evt) {
-        dropzone.addEventListener(evt, function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            dropzone.classList.add('dragover');
-        });
-    });
-
-    ['dragleave', 'drop'].forEach(function (evt) {
-        dropzone.addEventListener(evt, function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            dropzone.classList.remove('dragover');
-        });
-    });
-
-    dropzone.addEventListener('drop', function (e) {
-        var files = e.dataTransfer.files;
-        if (files.length > 0) handleFile(files[0]);
-    });
-
-    function handleFile(file) {
-        clearError();
-        var name = file.name || '';
-        if (!name.toLowerCase().endsWith('.xls')) {
-            showError('仅支持 .xls 格式文件（diy_report 模板），请重新选择。');
-            return;
-        }
-        currentFile = file;
-        fileInfo.hidden = false;
-        fileName.textContent = name + ' · ' + formatSize(file.size);
-        uploadBtn.disabled = false;
-        setStatus('', '已选文件');
+    function updateGenState() {
+        var n = (bsFile ? 1 : 0) + (stockFile ? 1 : 0);
+        manualGenBtn.disabled = n === 0;
+        manualGenText.textContent = n === 0 ? '生成分析报告' : '生成分析报告 · 已选 ' + n + ' / 2';
     }
 
     function formatSize(bytes) {
@@ -162,63 +175,283 @@
         return (bytes / 1024 / 1024).toFixed(1) + ' MB';
     }
 
-    // 公司名输入时，若已选文件则启用上传按钮
-    companyInput.addEventListener('input', function () {
-        if (currentFile) {
-            uploadBtn.disabled = !companyInput.value.trim();
-        }
-    });
-
-    // ── 上传 & 请求 ──────────────────────────
-    uploadBtn.addEventListener('click', function () {
-        if (!currentFile) return;
-        if (!companyInput.value.trim()) {
-            showError('请输入公司名称');
-            companyInput.focus();
+    function acceptSlotFile(cfg, file) {
+        clearErrorManual();
+        var name = (file.name || '').toLowerCase();
+        var dot = name.lastIndexOf('.');
+        var ext = dot >= 0 ? name.slice(dot) : '';
+        if (cfg.accept.indexOf(ext) === -1) {
+            showErrorManual(cfg.label + '仅支持 ' + cfg.acceptText + ' 格式文件，请重新选择。');
             return;
         }
-        uploadAndRender();
+        setSlotFile(cfg, file);
+        setStatus('', '已选文件');
+    }
+
+    slotConfig.forEach(function (cfg) {
+        if (!cfg.slot) return;
+
+        cfg.slot.addEventListener('click', function (e) {
+            if (e.target.closest('.slot-clear')) return;   // 清除按钮单独处理
+            cfg.input.click();
+        });
+        cfg.slot.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                cfg.input.click();
+            }
+        });
+
+        cfg.input.addEventListener('change', function (e) {
+            if (e.target.files.length > 0) acceptSlotFile(cfg, e.target.files[0]);
+        });
+
+        ['dragenter', 'dragover'].forEach(function (evt) {
+            cfg.slot.addEventListener(evt, function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                cfg.slot.classList.add('dragover');
+            });
+        });
+        ['dragleave', 'drop'].forEach(function (evt) {
+            cfg.slot.addEventListener(evt, function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                cfg.slot.classList.remove('dragover');
+            });
+        });
+        cfg.slot.addEventListener('drop', function (e) {
+            var files = e.dataTransfer.files;
+            if (files.length > 0) acceptSlotFile(cfg, files[0]);
+        });
+
+        cfg.clearBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            setSlotFile(cfg, null);
+            setStatus('', '就绪');
+        });
     });
 
-    async function uploadAndRender() {
-        clearError();
-        loadingBar.hidden = false;
-        uploadBtn.disabled = true;
+    // ── 手动上传：生成（并行上传所选文件，各自独立成败）──
+    manualForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        generateManual();
+    });
+
+    async function generateManual() {
+        clearErrorManual();
+        var companyName = manualCompany.value.trim();
+        if (!bsFile && !stockFile) {
+            showErrorManual('请至少选择一个文件');
+            return;
+        }
+        if (stockFile && !companyName) {
+            showErrorManual('上传个股财报时必须填写公司名称');
+            manualCompany.focus();
+            return;
+        }
+
+        loadingBarManual.hidden = false;
+        manualGenBtn.disabled = true;   // 防连点
         setStatus('loading', '解析中');
 
-        var formData = new FormData();
-        formData.append('file', currentFile);
-        formData.append('company_name', companyInput.value.trim());
+        var errors = [];
+        var bsDone = false, stockDone = false;
+        var bsData = null, stockData = null;
 
-        try {
-            // 1. 上传 .xls，获取 data_id
-            var resp = await fetch('/api/normalize', { method: 'POST', body: formData });
-            var data = await resp.json();
-
-            if (!resp.ok) {
-                throw new Error(data.detail || data.error || '解析失败');
+        var bsTask = bsFile ? (async function () {
+            try {
+                var fd = new FormData();
+                fd.append('file', bsFile);
+                if (companyName) fd.append('company_name', companyName);
+                var resp = await fetch('/api/bs-chart', { method: 'POST', body: fd });
+                var data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || '解析失败');
+                // bs_chart.js 暴露的渲染函数（跳过滚动，由下方统一控制定位）
+                if (window.renderBsResult) window.renderBsResult(data, true, companyName);
+                bsData = data;
+                bsDone = true;
+            } catch (err) {
+                errors.push('资产负债表：' + (err.message || '网络错误'));
             }
+        })() : Promise.resolve();
 
-            // 2. 并发请求 6 个图表
-            await renderAllCharts(data.data_id, data.company_name);
+        var stockTask = stockFile ? (async function () {
+            try {
+                var fd = new FormData();
+                fd.append('file', stockFile);
+                fd.append('company_name', companyName);
+                var resp = await fetch('/api/normalize', { method: 'POST', body: fd });
+                var data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || '解析失败');
+                renderAllCharts(data, true);
+                renderSummary(data);
+                stockData = data;
+                stockDone = true;
+            } catch (err) {
+                errors.push('个股财报：' + (err.message || '网络错误'));
+            }
+        })() : Promise.resolve();
 
-            // 3. 渲染数据摘要 + JSON
-            renderSummary(data);
-            setStatus('', '分析完成');
-        } catch (err) {
-            showError(err.message || '网络错误，请重试');
-        } finally {
-            loadingBar.hidden = true;
-            uploadBtn.disabled = false;
+        await Promise.all([bsTask, stockTask]);
+
+        loadingBarManual.hidden = true;
+        manualGenBtn.disabled = false;
+        updateGenState();
+
+        if (errors.length) {
+            showErrorManual(errors.join('；'));
+            return;
+        }
+
+        // 手动结果存入模式仓库并仅展示本次生成的结果区（未生成的类型隐藏）；
+        // 切 tab 后由 switchToMode 按仓库数据恢复，另一 tab 生成不覆盖
+        modeData.manual = {
+            bs: bsDone ? bsData : null,
+            bsCompany: companyName,
+            stock: stockDone ? stockData : null
+        };
+        resultSectionBs.hidden = !bsDone || currentMode !== 'manual';
+        resultSection.hidden = !stockDone || currentMode !== 'manual';
+        setStatus('', '分析完成');
+
+        // 滚动到首个结果：两个都生成时优先资产负债表（与在线模式一致）
+        var target = bsDone ? resultSectionBs : resultSection;
+        if (target) {
+            setTimeout(function () {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
         }
     }
 
-    // ── 并发渲染 6 个图表 ─────────────────────
-    async function renderAllCharts(dataId, companyName) {
-        resultSection.hidden = false;
-        chartSub.textContent = '公司：' + companyName;
+    // ── 手动 tab 清除：丢弃手动结果并复位表单 ──
+    var clearBtnManual = document.getElementById('clearBtnManual');
 
-        // 销毁旧实例
+    function clearManual() {
+        manualCompany.value = '';
+        slotConfig.forEach(function (cfg) {
+            if (cfg.slot) setSlotFile(cfg, null);   // 同时复位生成按钮禁用态
+        });
+        errorBoxManual.hidden = true;
+        loadingBarManual.hidden = true;
+        modeData.manual = emptyModeState();
+        // 仅清空本 tab 的结果展示；另一 tab 的数据与图表不受影响
+        if (currentMode === 'manual') {
+            resultSectionBs.hidden = true;
+            resultSection.hidden = true;
+        }
+        setStatus('', '就绪');
+    }
+
+    if (clearBtnManual) clearBtnManual.addEventListener('click', clearManual);
+
+    // ── 由标准化数据构建 6 个图表的数据包 ──────
+    function buildChartPayloads(data) {
+        var periods = data.periods;
+        var columns = data.columns;
+        var rows = data.rows;
+        var company = data.company_name;
+
+        function col(name) {
+            var idx = columns.indexOf(name);
+            return rows.map(function (r) {
+                var v = r[idx];
+                return v === null || v === undefined ? null : v / 1e8; // 元 → 亿元
+            });
+        }
+        function ratio(name) { // 毛利率等已经是比率，不除以 1e8
+            var idx = columns.indexOf(name);
+            return rows.map(function (r) { return r[idx]; });
+        }
+
+        var C = T.series;
+        var axisMoney = { title: '亿元' };
+        var axisPct = { title: '毛利率', unit: '%' };
+
+        return {
+            'revenue-cashflow': {
+                title: company + ' 总营收与主业现金流增长趋势',
+                chart_type: 'line',
+                labels: periods,
+                extra: {
+                    series: [
+                        { name: '总营收',     data: col('总营收'),   type: 'line', color: C[0] },
+                        { name: '主业现金流', data: col('主业现金流'), type: 'line', color: C[1] }
+                    ],
+                    scales: { left: axisMoney }
+                }
+            },
+            'profit-cashflow-fcf': {
+                title: company + ' 净利润、现金流净额与自由现金流趋势',
+                chart_type: 'line',
+                labels: periods,
+                extra: {
+                    series: [
+                        { name: '净利润',        data: col('净利润'),        type: 'line', color: C[0] },
+                        { name: '现金流净额',    data: col('现金流净额'),    type: 'line', color: C[1] },
+                        { name: '自由现金流FCF', data: col('自由现金流FCF'), type: 'line', color: C[2] }
+                    ],
+                    scales: { left: axisMoney }
+                }
+            },
+            'cost-margin': {
+                title: company + ' 营业成本与毛利率分析',
+                chart_type: 'mixed',
+                labels: periods,
+                extra: {
+                    series: [
+                        { name: '营业成本',   data: col('营业成本'),   type: 'bar',  color: C[0] },
+                        { name: '销售毛利率', data: ratio('销售毛利率'), type: 'line', color: C[3], y_axis: 'right', unit: '%' }
+                    ],
+                    scales: { left: axisMoney, right: axisPct }
+                }
+            },
+            'three-expenses': {
+                title: company + ' 三费用与净利润对比',
+                chart_type: 'mixed',
+                labels: periods,
+                extra: {
+                    series: [
+                        { name: '销售费用', data: col('销售费用'), type: 'bar', color: C[1] },
+                        { name: '管理费用', data: col('管理费用'), type: 'bar', color: C[2] },
+                        { name: '研发费用', data: col('研发费用'), type: 'bar', color: C[4] },
+                        { name: '净利润',   data: col('净利润'),   type: 'line', color: C[0] }
+                    ],
+                    scales: { left: axisMoney }
+                }
+            },
+            'revenue-payable': {
+                title: company + ' 总营收与应付票据及应付账款对比',
+                chart_type: 'mixed',
+                labels: periods,
+                extra: {
+                    series: [
+                        { name: '总营收',             data: col('总营收'), type: 'bar',  color: C[0] },
+                        { name: '应付票据及应付账款', data: col('应付票据及应付账款'), type: 'line', color: C[3] }
+                    ],
+                    scales: { left: axisMoney }
+                }
+            },
+            'rd-profit': {
+                title: company + ' 研发费用与净利润对比',
+                chart_type: 'mixed',
+                labels: periods,
+                extra: {
+                    series: [
+                        { name: '研发费用', data: col('研发费用'), type: 'bar',  color: C[4] },
+                        { name: '净利润',   data: col('净利润'),   type: 'line', color: C[0] }
+                    ],
+                    scales: { left: axisMoney }
+                }
+            }
+        };
+    }
+
+    // ── 渲染 6 个图表 ─────────────────────────
+    function renderAllCharts(data, skipScroll) {
+        resultSection.hidden = false;
+        chartSub.textContent = '公司：' + data.company_name;
+
         Object.keys(chartInstances).forEach(function (key) {
             if (chartInstances[key]) {
                 chartInstances[key].destroy();
@@ -226,67 +459,29 @@
             }
         });
 
-        // 并发请求所有图表
-        var promises = CHART_DEFS.map(function (def) {
-            return fetch('/api/charts/' + def.name + '?data_id=' + encodeURIComponent(dataId))
-                .then(function (r) { return r.json(); })
-                .then(function (chartData) {
-                    return { def: def, chartData: chartData, ok: true };
-                })
-                .catch(function (err) {
-                    return { def: def, chartData: null, ok: false, err: err };
-                });
-        });
+        var payloads = buildChartPayloads(data);
 
-        var results = await Promise.all(promises);
-
-        // 逐个渲染
-        results.forEach(function (result) {
-            var def = result.def;
+        CHART_DEFS.forEach(function (def) {
+            var payload = payloads[def.name];
             var titleEl = document.getElementById('title-' + def.name);
-            var typeEl = document.getElementById('type-' + def.name);
             var canvas = document.getElementById('canvas-' + def.name);
-            var card = document.querySelector('.stock-chart-card[data-chart="' + def.name + '"]');
 
-            if (result.ok && result.chartData) {
-                titleEl.textContent = result.chartData.title;
-                typeEl.textContent = def.typeLabel;
-                renderChart(canvas, result.chartData, def.name);
-                // 缓存数据供全屏重建使用
-                chartDataCache[def.name] = result.chartData;
-                // 注入放大按钮（避免重复）
-                if (card && !card.querySelector('.btn-zoom')) {
-                    var zoomBtn = document.createElement('button');
-                    zoomBtn.className = 'btn-zoom';
-                    zoomBtn.title = '放大查看';
-                    zoomBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>';
-                    zoomBtn.addEventListener('click', function (e) {
-                        e.stopPropagation();
-                        openFullscreen(def.name);
-                    });
-                    card.appendChild(zoomBtn);
-                }
-            } else {
-                titleEl.textContent = '加载失败';
-                typeEl.textContent = def.typeLabel;
-                console.error('图表 ' + def.name + ' 加载失败:', result.err);
-            }
+            titleEl.textContent = payload.title;
+            renderChart(canvas, payload, def.name);
+            chartDataCache[def.name] = payload;
         });
 
-        // 滚动到结果
-        setTimeout(function () {
-            resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }, 100);
+        if (!skipScroll) {
+            setTimeout(function () {
+                resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+        }
     }
 
-    // ── Chart.js 渲染（支持 line / mixed）─────
+    // ── Chart.js 渲染（line / mixed，主题化）─────
     function renderChart(canvas, chartData, chartName, enableZoom) {
-        if (window.ChartDataLabels) {
-            Chart.register(ChartDataLabels);
-        }
-        if (window.ChartZoom) {
-            Chart.register(ChartZoom);
-        }
+        if (window.ChartDataLabels) Chart.register(ChartDataLabels);
+        if (window.ChartZoom) Chart.register(ChartZoom);
 
         var labels = chartData.labels || [];
         var extra = chartData.extra || {};
@@ -294,7 +489,6 @@
         var scales = extra.scales || {};
         var chartType = chartData.chart_type || 'line';
 
-        // 构建 datasets
         var datasets = series.map(function (s) {
             var ds = {
                 label: s.name,
@@ -303,50 +497,50 @@
                 backgroundColor: s.type === 'bar' ? s.color : hexToRgba(s.color, 0.1),
                 borderWidth: s.type === 'bar' ? 0 : 2,
                 tension: 0.35,
-                fill: s.type === 'line' ? false : undefined,
+                fill: false,
                 pointRadius: s.type === 'line' ? 0 : undefined,
                 pointHoverRadius: s.type === 'line' ? 5 : undefined,
                 pointBackgroundColor: s.color,
-                pointBorderColor: '#f5f0e6',
+                pointBorderColor: T.pointBorder,
                 pointBorderWidth: 1.5,
                 yAxisID: s.y_axis === 'right' ? 'yRight' : 'yLeft',
                 type: s.type,
-                order: s.type === 'bar' ? 2 : 1,  // 折线在上层
+                order: s.type === 'bar' ? 2 : 1
             };
             if (s.type === 'bar') {
-                ds.borderRadius = 2;
+                ds.borderRadius = T.barRadius;
                 ds.maxBarThickness = 28;
             }
             return ds;
         });
 
-        // 构建 scales 配置
         var chartScales = {
             x: {
                 ticks: {
-                    color: '#5a4a38',
-                    font: { size: 10, family: "'Noto Sans SC', sans-serif", weight: '500' },
-                    autoSkip: false,
+                    color: T.textMute,
+                    font: { size: 10, family: T.font },
+                    autoSkip: !enableZoom,
+                    maxTicksLimit: enableZoom ? 60 : 12,
                     maxRotation: 60,
-                    minRotation: 60,
+                    minRotation: 45,
                     padding: 4,
-                    // 用 callback 把日期格式从 YYYY-MM-DD 缩为 YYYY-Qn，便于在密集空间下显示
-                    callback: function (value, index) {
+                    callback: function (value) {
                         var label = this.getLabelForValue(value);
                         var m = /-(\d{2})-/.exec(label);
                         if (m) {
-                            var q = Math.floor(parseInt(m[1], 10) / 3) + 1;
+                            // 报告期为季末日期（03-31=Q1、06-30=Q2、09-30=Q3、12-31=Q4），
+                            // 用 ceil 换算季度，避免 Q1 被标成 Q2、Q4 被标成 Q5
+                            var q = Math.ceil(parseInt(m[1], 10) / 3);
                             return label.substring(0, 4) + '-Q' + q;
                         }
                         return label;
                     }
                 },
                 grid: { display: false },
-                border: { color: '#2b1f15', width: 1 }
+                border: { color: T.axisBorder, width: 1 }
             }
         };
 
-        // 左轴（必有）
         var leftScale = scales.left || {};
         chartScales.yLeft = {
             position: 'left',
@@ -354,37 +548,35 @@
             title: {
                 display: !!leftScale.title,
                 text: leftScale.title || '',
-                color: '#5a4a38',
-                font: { size: 12, family: "'Noto Sans SC', sans-serif", weight: '500' }
+                color: T.text,
+                font: { size: 11, family: T.font }
             },
             ticks: {
-                color: '#8a7a64',
-                font: { size: 11, family: "'Noto Sans SC', sans-serif" },
+                color: T.textMute,
+                font: { size: 11, family: T.font },
                 callback: function (v) {
-                    return leftScale.unit === '%' ? (v * 100).toFixed(1) + '%' : v.toFixed(1);
+                    return leftScale.unit === '%' ? (v * 100).toFixed(0) + '%' : v.toFixed(1);
                 }
             },
-            grid: { color: 'rgba(184, 149, 106, 0.25)', drawTicks: false },
+            grid: { color: T.grid, drawTicks: false },
             border: { display: false }
         };
 
-        // 右轴（mixed 类型才有）
         if (scales.right) {
-            var rightScale = scales.right;
             chartScales.yRight = {
                 position: 'right',
                 beginAtZero: true,
                 title: {
-                    display: !!rightScale.title,
-                    text: rightScale.title || '',
-                    color: '#5a4a38',
-                    font: { size: 12, family: "'Noto Sans SC', sans-serif", weight: '500' }
+                    display: !!scales.right.title,
+                    text: scales.right.title || '',
+                    color: T.text,
+                    font: { size: 11, family: T.font }
                 },
                 ticks: {
-                    color: '#8a7a64',
-                    font: { size: 11, family: "'Noto Sans SC', sans-serif" },
+                    color: T.textMute,
+                    font: { size: 11, family: T.font },
                     callback: function (v) {
-                        return rightScale.unit === '%' ? (v * 100).toFixed(1) + '%' : v.toFixed(1);
+                        return scales.right.unit === '%' ? (v * 100).toFixed(0) + '%' : v.toFixed(1);
                     }
                 },
                 grid: { display: false },
@@ -400,31 +592,31 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
-                layout: { padding: { top: 16, right: 24, bottom: 8, left: 8 } },
-                animation: { duration: 800, easing: 'easeOutQuart' },
+                layout: { padding: { top: 16, right: 16, bottom: 4, left: 4 } },
+                animation: { duration: 700, easing: 'easeOutQuart' },
                 plugins: {
                     legend: {
                         display: true,
                         position: 'top',
                         align: 'end',
                         labels: {
-                            color: '#5a4a38',
-                            font: { size: 12, family: "'Noto Sans SC', sans-serif", weight: '500' },
+                            color: T.text,
+                            font: { size: 11, family: T.font },
                             boxWidth: 14,
-                            boxHeight: 14,
-                            padding: 16,
-                            usePointStyle: false
+                            boxHeight: 8,
+                            padding: 14,
+                            usePointStyle: true
                         }
                     },
                     tooltip: {
-                        backgroundColor: '#f5f0e6',
-                        borderColor: '#b8956a',
+                        backgroundColor: T.tooltipBg,
+                        borderColor: T.tooltipBorder,
                         borderWidth: 1,
                         padding: 12,
-                        titleColor: '#2b1f15',
-                        bodyColor: '#2b1f15',
-                        titleFont: { size: 13, family: "'Noto Serif SC', serif", weight: '700' },
-                        bodyFont: { size: 12, family: "'Noto Sans SC', sans-serif" },
+                        titleColor: T.tooltipFg,
+                        bodyColor: T.tooltipFg,
+                        titleFont: { size: 12, family: T.font, weight: '600' },
+                        bodyFont: { size: 12, family: T.font },
                         displayColors: true,
                         boxWidth: 10,
                         boxHeight: 10,
@@ -432,24 +624,17 @@
                             label: function (c) {
                                 var val = c.parsed.y;
                                 if (val === null || val === undefined) return null;
-                                var ds = c.dataset;
-                                var unit = '亿';
-                                // 从 series 中找对应单位
                                 var s = series[c.datasetIndex];
                                 if (s && s.unit === '%') {
-                                    return ds.label + ': ' + (val * 100).toFixed(2) + '%';
+                                    return c.dataset.label + ': ' + (val * 100).toFixed(2) + '%';
                                 }
-                                return ds.label + ': ' + val.toFixed(3) + ' 亿';
+                                return c.dataset.label + ': ' + val.toFixed(3) + ' 亿元';
                             }
                         }
                     },
                     datalabels: { display: false },
                     zoom: enableZoom ? {
-                        pan: {
-                            enabled: true,
-                            mode: 'xy',
-                            modifierKey: null
-                        },
+                        pan: { enabled: true, mode: 'xy', modifierKey: null },
                         zoom: {
                             wheel: { enabled: true, speed: 0.1 },
                             pinch: { enabled: true },
@@ -465,14 +650,10 @@
             }
         });
 
-        // 存储实例：全屏模式不污染 chartInstances（用独立变量管理）
-        if (!enableZoom) {
-            chartInstances[chartName] = instance;
-        }
+        if (!enableZoom) chartInstances[chartName] = instance;
         return instance;
     }
 
-    // ── hex 转 rgba ──────────────────────────
     function hexToRgba(hex, alpha) {
         var h = hex.replace('#', '');
         if (h.length === 3) {
@@ -489,32 +670,26 @@
         sumCompany.textContent = data.company_name || '—';
         sumPeriods.textContent = (data.periods || []).length + ' 期';
         var periods = data.periods || [];
-        sumRange.textContent = periods.length > 0 ? (periods[0] + ' ~ ' + periods[periods.length - 1]) : '—';
+        sumRange.textContent = periods.length ? (periods[0] + ' ~ ' + periods[periods.length - 1]) : '—';
         sumColumns.textContent = (data.columns || []).length + ' 列';
         sumSource.textContent = data.source_file || '—';
-
-        // JSON 附录
         jsonContent.textContent = JSON.stringify(data, null, 2);
     }
 
     // ── JSON 折叠 ─────────────────────────────
-    jsonToggle.addEventListener('click', function () {
-        var isOpen = !jsonContent.hidden;
-        if (isOpen) {
-            jsonContent.hidden = true;
-            jsonToggle.classList.remove('open');
-        } else {
-            jsonContent.hidden = false;
-            jsonToggle.classList.add('open');
-        }
+    jsonToggle.addEventListener('toggle', function () {
+        jsonContent.hidden = !jsonToggle.open;
     });
 
-    // ── 全屏放大 ─────────────────────────────
+    // ── 全屏放大 ──────────────────────────────
+    var fullscreenCurrentName = null;   // 当前全屏展示的图表名（用于方向键切换）
+
     function openFullscreen(chartName) {
         var chartData = chartDataCache[chartName];
         if (!chartData) return;
 
-        // 销毁旧的全屏 Chart
+        fullscreenCurrentName = chartName;
+
         if (fullscreenChart) {
             fullscreenChart.destroy();
             fullscreenChart = null;
@@ -524,15 +699,26 @@
         fullscreenOverlay.hidden = false;
         document.body.style.overflow = 'hidden';
 
-        // 延迟一帧确保 canvas 已可见，否则尺寸为 0
         requestAnimationFrame(function () {
             fullscreenChart = renderChart(fullscreenCanvas, chartData, chartName, true);
-            return fullscreenChart;
         });
+    }
+
+    // 方向键 / 翻页键在全屏中切换上一张 / 下一张图表（6 张循环回绕）
+    function switchFullscreen(step) {
+        if (fullscreenOverlay.hidden || !fullscreenCurrentName) return;
+        var idx = -1;
+        for (var i = 0; i < CHART_DEFS.length; i++) {
+            if (CHART_DEFS[i].name === fullscreenCurrentName) { idx = i; break; }
+        }
+        if (idx < 0) return;
+        var next = CHART_DEFS[(idx + step + CHART_DEFS.length) % CHART_DEFS.length];
+        openFullscreen(next.name);
     }
 
     function closeFullscreen() {
         fullscreenOverlay.hidden = true;
+        fullscreenCurrentName = null;
         document.body.style.overflow = '';
         if (fullscreenChart) {
             fullscreenChart.destroy();
@@ -540,23 +726,127 @@
         }
     }
 
-    btnCloseFullscreen.addEventListener('click', closeFullscreen);
-    btnResetZoom.addEventListener('click', function () {
-        if (fullscreenChart) {
-            fullscreenChart.resetZoom();
-        }
+    document.querySelectorAll('.stock-chart-card .btn-zoom').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var card = btn.closest('.stock-chart-card');
+            openFullscreen(card.getAttribute('data-chart'));
+        });
     });
 
-    // 点击覆盖层空白处关闭
+    btnCloseFullscreen.addEventListener('click', closeFullscreen);
+    btnResetZoom.addEventListener('click', function () {
+        if (fullscreenChart) fullscreenChart.resetZoom();
+    });
+
     fullscreenOverlay.addEventListener('click', function (e) {
         if (e.target === fullscreenOverlay) closeFullscreen();
     });
 
-    // ESC 关闭
+    // 全屏中的键盘交互：ESC 关闭，←/→ 或 PgUp/PgDn 切换上一张/下一张图表
     document.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape' && !fullscreenOverlay.hidden) {
+        if (fullscreenOverlay.hidden) return;
+        if (e.key === 'Escape') {
             closeFullscreen();
+        } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+            e.preventDefault();
+            switchFullscreen(1);
+        } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+            e.preventDefault();
+            switchFullscreen(-1);
         }
     });
+
+    // ── 在线获取：一次 code 生成两套报告 ─────
+    var codeInput = document.getElementById('codeInput');
+    var fetchBtn = document.getElementById('fetchBtn');
+    var errorBoxOnline = document.getElementById('errorBoxOnline');
+    var loadingBarOnline = document.getElementById('loadingBarOnline');
+
+    function showErrorOnline(msg) {
+        errorBoxOnline.hidden = false;
+        errorBoxOnline.textContent = '⚠ ' + msg;
+        setStatus('error', '错误');
+    }
+
+    async function fetchAllByCode() {
+        var code = (codeInput.value || '').trim();
+        if (!/^\d{6}$/.test(code)) {
+            showErrorOnline('请输入 6 位数字股票代码');
+            codeInput.focus();
+            return;
+        }
+
+        errorBoxOnline.hidden = true;
+        loadingBarOnline.hidden = false;
+        fetchBtn.disabled = true;   // 防连点：后端对同花顺请求有全局限流
+        setStatus('loading', '获取中');
+
+        try {
+            var resp = await fetch('/api/fetch-all?code=' + encodeURIComponent(code), { method: 'POST' });
+            var data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || '获取失败');
+
+            // 个股财报 6 张图 + 数据摘要
+            renderAllCharts(data.stock);
+            renderSummary(data.stock);
+            // 资产负债表优先展示（bs_chart.js 暴露的渲染函数，公司名由在线结果传入）
+            if (window.renderBsResult) window.renderBsResult(data.bs, true, data.company_name);
+            // 在线结果存入模式仓库：切换 tab 后可完整恢复，另一 tab 生成不覆盖
+            modeData.online = { bs: data.bs, bsCompany: data.company_name, stock: data.stock };
+            setStatus('', '分析完成');
+
+            // 生成期间用户已切到另一 tab：数据只入库不显示，切回时由 switchToMode 渲染
+            if (currentMode !== 'online') {
+                resultSectionBs.hidden = true;
+                resultSection.hidden = true;
+                return;
+            }
+
+            // 滚动到资产负债表区块：生成后第一眼看到资产表
+            setTimeout(function () {
+                resultSectionBs.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+        } catch (err) {
+            showErrorOnline(err.message || '网络错误，请重试');
+        } finally {
+            loadingBarOnline.hidden = true;
+            fetchBtn.disabled = false;
+        }
+    }
+
+    fetchBtn.addEventListener('click', fetchAllByCode);
+    codeInput.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') fetchAllByCode();
+    });
+
+    // ── 在线 tab 清除：丢弃在线结果并复位表单 ──
+    var clearBtnOnline = document.getElementById('clearBtnOnline');
+
+    function clearOnline() {
+        codeInput.value = '';
+        errorBoxOnline.hidden = true;
+        loadingBarOnline.hidden = true;
+        modeData.online = emptyModeState();
+        // 仅清空本 tab 的结果展示；另一 tab 的数据与图表不受影响
+        if (currentMode === 'online') {
+            resultSectionBs.hidden = true;
+            resultSection.hidden = true;
+        }
+        setStatus('', '就绪');
+    }
+
+    if (clearBtnOnline) clearBtnOnline.addEventListener('click', clearOnline);
+
+    // ── 深链接：#stock / #bs 平滑滚动到对应区块 ──
+    function scrollToHash() {
+        var h = (location.hash || '').replace('#', '');
+        var el = null;
+        if (h === 'stock' && resultSection && !resultSection.hidden) el = resultSection;
+        if (h === 'bs' && resultSectionBs && !resultSectionBs.hidden) el = resultSectionBs;
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    scrollToHash();
+    window.addEventListener('hashchange', scrollToHash);
 
 })();

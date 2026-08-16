@@ -69,3 +69,18 @@ class NormalizeResponse(BaseModel):
     columns: List[str] = Field(default_factory=list, description="列名列表，与 finance.stock_normalize.OUTPUT_COLUMNS 一致")
     rows: List[List[Union[str, float, None]]] = Field(default_factory=list, description="数据行（每行首列为日期字符串 YYYY-MM-DD，其余为 float 或 None）")
     meta: Dict[str, Any] = Field(default_factory=dict, description="元信息（period_count/column_count/ttm_columns/new_columns 等）")
+
+
+class FetchAllResponse(BaseModel):
+    """在线一键获取响应模型
+
+    POST /api/fetch-all?code=xxxxxx 返回此结构：
+    一次输入股票代码，同时返回个股财报标准化数据与资产负债结构两套结果。
+    股票名称由同花顺搜索接口反查填充。
+    """
+
+    code: str = Field(..., description="股票代码（6 位数字）")
+    company_name: str = Field("", description="股票名称（搜索接口反查，失败时为代码本身）")
+    stock: NormalizeResponse = Field(..., description="个股财报标准化数据（同 POST /api/normalize）")
+    bs: ChartResponse = Field(..., description="资产负债结构图表数据（同 POST /api/bs-chart）")
+    cached: bool = Field(False, description="是否命中服务端结果缓存（未发起外部请求）")

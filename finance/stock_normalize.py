@@ -229,7 +229,8 @@ def read_stock_xls(path: Path) -> Tuple[Dict[str, Dict[date, float]], List[date]
     # 由 compute_derived 计算的科目，模板中不需要也不应该手动添加
     DERIVED_LABELS = {"归母净资产", "自由现金流FCF"}
 
-    wb = xlrd.open_workbook(str(path))
+    # 同花顺在线导出的 .xls 流带有非标准标记，需忽略 workbook corruption 检查
+    wb = xlrd.open_workbook(str(path), ignore_workbook_corruption=True)
     ws = wb.sheet_by_index(0)
 
     if ws.nrows < 3 or ws.ncols < 2:

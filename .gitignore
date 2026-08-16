@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local env config
+.env
+
+# ZCode session dir & GUI test screenshots
+.zcode/
+gui-test-screenshots/
