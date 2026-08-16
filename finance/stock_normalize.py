@@ -61,6 +61,9 @@ OUTPUT_COLUMNS: List[str] = [
     "管理费用",
     "研发费用",
     "应付票据及应付账款",
+    # 新增 2 列（单季值，新版模板导出）
+    "净资产收益率",
+    "基本每股收益",
 ]
 
 # 原始科目名 → 内部别名映射（原有 7 项 + 新增 6 项）
@@ -80,6 +83,9 @@ LABEL_MAP: Dict[str, str] = {
     "管理费用": "管理费用(元)",
     "研发费用": "研发费用(元)",
     "应付票据及应付账款": "应付票据及应付账款(元)",
+    # 新增科目（单季值，新版模板导出）
+    "净资产收益率": "净资产收益率",
+    "基本每股收益": "基本每股收益(元)",
 }
 
 # 需要计算 TTM 的科目（内部别名）——仅原有 4 个金额科目，新增科目不算 TTM
@@ -101,10 +107,12 @@ SINGLE_PERIOD_NEW_COLUMNS: Dict[str, str] = {
     "管理费用": "管理费用",
     "研发费用": "研发费用",
     "应付票据及应付账款": "应付票据及应付账款",
+    "净资产收益率": "净资产收益率",
+    "基本每股收益": "基本每股收益",
 }
 
-# 毛利率类科目（百分比，需要转小数）
-PERCENT_LABELS: List[str] = ["销售毛利率"]
+# 毛利率类科目（百分比，需要转小数）；匹配的是原始科目名
+PERCENT_LABELS: List[str] = ["销售毛利率", "净资产收益率"]
 
 # 数据范围
 BUFFER_START_YEAR = 2015  # 缓冲起始年（含 2015 全年用于 TTM 计算）
@@ -385,6 +393,60 @@ def compute_ttm(
     return ttm
 
 
+def _quarter_index(d: date) -> int:
+    """报告期 → 全局季度序号（年×4+季度），用于判断季度连续性。"""
+    return d.year * 4 + (d.month - 1) // 3
+
+
+def compute_ttm_quarterly(
+    values: Dict[date, float], periods: List[date]
+) -> Dict[date, float]:
+    """对单季值序列计算滚动 TTM = 最近 4 个日历连续季度之和。
+
+    适用于新版模板导出（每列为单季值）。任一季度缺失（如早年只有
+    年报期）则该期不计 TTM，与 compute_ttm 的"缺历史即跳过"语义一致。
+    """
+    ttm: Dict[date, float] = {}
+    idx_of = {d: _quarter_index(d) for d in periods}
+    for i, d in enumerate(periods):
+        cur = values.get(d)
+        if cur is None:
+            continue
+        qi = idx_of[d]
+        window = [cur]
+        for j in range(1, 4):
+            if i - j < 0 or idx_of[periods[i - j]] != qi - j:
+                break
+            v = values.get(periods[i - j])
+            if v is None:
+                break
+            window.append(v)
+        else:
+            ttm[d] = sum(window)
+    return ttm
+
+
+def _detect_quarterly(
+    data: Dict[str, Dict[date, float]], periods: List[date]
+) -> bool:
+    """检测文件口径：科目值为单季值还是年初至今累计值。
+
+    以营业总收入为基准（季度收入恒为正，累计口径同年内必不递减）：
+    任一年份内相邻可用值出现递减 → 单季口径；全部年份单调不减 → 累计口径。
+    老格式手动上传（累计值）与新版在线导出（单季值）由此区分。
+    """
+    revenue = data.get(LABEL_MAP["总营收"], {})
+    by_year: Dict[int, List[float]] = {}
+    for d in periods:
+        v = revenue.get(d)
+        if v is not None:
+            by_year.setdefault(d.year, []).append(v)
+    for vals in by_year.values():
+        if len(vals) >= 2 and any(b < a for a, b in zip(vals, vals[1:])):
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # 4. 组装输出行
 # ---------------------------------------------------------------------------
@@ -403,11 +465,14 @@ def build_output_rows(
     Returns:
         (output_periods, rows) 其中 rows 每行长度 = len(OUTPUT_COLUMNS)
     """
-    # 预计算每个 TTM 科目（仍用原始 periods，缺失期不参与 TTM）
+    # 预计算每个 TTM 科目（仍用原始 periods，缺失期不参与 TTM）。
+    # 口径自适应：累计值走原公式；单季值（新版模板导出）走滚动 4 季求和
+    quarterly = _detect_quarterly(data, periods)
+    ttm_compute = compute_ttm_quarterly if quarterly else compute_ttm
     ttm_data: Dict[str, Dict[date, float]] = {}
     for alias in TTM_LABELS:
         raw_name = LABEL_MAP[alias]
-        ttm_data[alias] = compute_ttm(data.get(raw_name, {}), periods)
+        ttm_data[alias] = ttm_compute(data.get(raw_name, {}), periods)
 
     # 过滤输出周期：>= output_start_year（仅原始数据）
     raw_out_periods = [d for d in periods if d.year >= output_start_year]
@@ -544,7 +609,11 @@ def write_xlsx(
     num_format = "#,##0.00;-#,##0.00;-"
     percent_format = "0.00%;-0.00%;-"
     # 销售毛利率列在 OUTPUT_COLUMNS 中的索引（1-based）
-    percent_col_idx = OUTPUT_COLUMNS.index("销售毛利率") + 1
+    # 百分比格式列（1-based 索引集合）：毛利率、净资产收益率
+    percent_col_set = {
+        OUTPUT_COLUMNS.index("销售毛利率") + 1,
+        OUTPUT_COLUMNS.index("净资产收益率") + 1,
+    }
 
     for r_idx, row in enumerate(rows, start=2):
         for c_idx, val in enumerate(row, start=1):
@@ -557,8 +626,8 @@ def write_xlsx(
                 cell.font = body_font
                 cell.alignment = body_align
                 if isinstance(val, (int, float)):
-                    # 毛利率列用百分比格式，其余用金额格式
-                    if c_idx == percent_col_idx:
+                    # 百分比列用百分比格式，其余用金额格式
+                    if c_idx in percent_col_set:
                         cell.number_format = percent_format
                     else:
                         cell.number_format = num_format

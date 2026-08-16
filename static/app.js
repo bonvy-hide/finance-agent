@@ -70,7 +70,8 @@
         { name: 'cost-margin' },
         { name: 'three-expenses' },
         { name: 'revenue-payable' },
-        { name: 'rd-profit' }
+        { name: 'roe-growth' },
+        { name: 'eps-growth' }
     ];
 
     // ── 入口模式切换（在线获取 / 手动上传）──────
@@ -359,14 +360,78 @@
                 return v === null || v === undefined ? null : v / 1e8; // 元 → 亿元
             });
         }
-        function ratio(name) { // 毛利率等已经是比率，不除以 1e8
+        function ratio(name) { // 毛利率/ROE 等已是比率，不除以 1e8
             var idx = columns.indexOf(name);
             return rows.map(function (r) { return r[idx]; });
+        }
+        function raw(name) { // EPS（元）等原始值直取，不做单位换算
+            var idx = columns.indexOf(name);
+            return rows.map(function (r) {
+                return r[idx] === null || r[idx] === undefined ? null : r[idx];
+            });
         }
 
         var C = T.series;
         var axisMoney = { title: '亿元' };
         var axisPct = { title: '毛利率', unit: '%' };
+
+        // ── ROE 年度聚合：TTM ROE（滚动 4 季和）+ 同比增长率 ──
+        var roeRaw = ratio('净资产收益率');
+        // 报告期(YYYY-MM-DD 季末) → 全局季度序号 qi = 年×4+(季度-1)
+        function quarterIndexOf(p) {
+            var m = /^(\d{4})-(\d{2})-/.exec(p);
+            if (!m) return null;
+            return parseInt(m[1], 10) * 4 + (Math.ceil(parseInt(m[2], 10) / 3) - 1);
+        }
+        var roePts = [];  // {qi, v}（按 periods 升序、非空）
+        periods.forEach(function (p, i) {
+            var qi = quarterIndexOf(p);
+            if (qi !== null && roeRaw[i] !== null && roeRaw[i] !== undefined) {
+                roePts.push({ qi: qi, v: roeRaw[i] });
+            }
+        });
+        // 各点滚动 TTM：前推 3 个日历连续季度齐全才可算
+        var roeTTM = roePts.map(function (pt, i) {
+            var sum = pt.v;
+            for (var j = 1; j <= 3; j++) {
+                var prev = roePts[i - j];
+                if (!prev || prev.qi !== pt.qi - j) return null;
+                sum += prev.v;
+            }
+            return sum;
+        });
+        // 每年取最后一个可用点：TTM 可算用 TTM（完整年=该年 4 季和），
+        // 不可算（如年报期单点/早年缺季）退化为该点原值
+        var yearLast = {};   // 年份字符串 -> {v, ttm}
+        roePts.forEach(function (pt, i) {
+            yearLast[String(Math.floor(pt.qi / 4))] = { v: pt.v, ttm: roeTTM[i] };
+        });
+        var roeYears = Object.keys(yearLast).sort();
+        var roeBars = [], roeYoY = [];
+        roeYears.forEach(function (y, idx) {
+            var last = yearLast[y];
+            var val = (last.ttm !== null && last.ttm !== undefined) ? last.ttm : last.v;
+            roeBars.push(val);
+            var prevVal = idx > 0 ? roeBars[idx - 1] : null;
+            roeYoY.push(idx > 0 && prevVal ? (val - prevVal) / Math.abs(prevVal) : null);
+        });
+
+        // ── EPS 同比：单季 EPS 与去年同季比较 ──
+        var epsRaw = raw('基本每股收益');
+        var epsByQuarter = {};   // qi -> 值
+        periods.forEach(function (p, i) {
+            var qi = quarterIndexOf(p);
+            if (qi !== null && epsRaw[i] !== null && epsRaw[i] !== undefined) {
+                epsByQuarter[qi] = epsRaw[i];
+            }
+        });
+        var epsYoY = periods.map(function (p, i) {
+            var qi = quarterIndexOf(p);
+            if (qi === null || epsRaw[i] === null || epsRaw[i] === undefined) return null;
+            var prev = epsByQuarter[qi - 4];
+            if (prev === undefined || prev === 0) return null;
+            return (epsRaw[i] - prev) / Math.abs(prev);
+        });
 
         return {
             'revenue-cashflow': {
@@ -433,22 +498,40 @@
                     scales: { left: axisMoney }
                 }
             },
-            'rd-profit': {
-                title: company + ' 研发费用与净利润对比',
+            'roe-growth': {
+                title: company + ' ROE增长（TTM·年度）',
+                chart_type: 'mixed',
+                labels: roeYears,
+                extra: {
+                    series: [
+                        { name: 'TTM ROE',    data: roeBars, type: 'bar',  color: C[0], unit: '%' },
+                        { name: '同比增长率', data: roeYoY,  type: 'line', color: C[3], y_axis: 'right', unit: '%' }
+                    ],
+                    scales: {
+                        left: { title: 'TTM ROE', unit: '%' },
+                        right: { title: '同比增长率', unit: '%' }
+                    }
+                }
+            },
+            'eps-growth': {
+                title: company + ' EPS增长（单季度）',
                 chart_type: 'mixed',
                 labels: periods,
                 extra: {
                     series: [
-                        { name: '研发费用', data: col('研发费用'), type: 'bar',  color: C[4] },
-                        { name: '净利润',   data: col('净利润'),   type: 'line', color: C[0] }
+                        { name: '单季EPS',    data: epsRaw, type: 'bar',  color: C[0], unit: '元' },
+                        { name: '同比增长率', data: epsYoY, type: 'line', color: C[3], y_axis: 'right', unit: '%' }
                     ],
-                    scales: { left: axisMoney }
+                    scales: {
+                        left: { title: 'EPS（元/股）', unit: '元' },
+                        right: { title: '同比增长率', unit: '%' }
+                    }
                 }
             }
         };
     }
 
-    // ── 渲染 6 个图表 ─────────────────────────
+    // ── 渲染图表（ROE/EPS 等列缺失时对应卡片自动隐藏）──
     function renderAllCharts(data, skipScroll) {
         resultSection.hidden = false;
         chartSub.textContent = '公司：' + data.company_name;
@@ -466,6 +549,18 @@
             var payload = payloads[def.name];
             var titleEl = document.getElementById('title-' + def.name);
             var canvas = document.getElementById('canvas-' + def.name);
+            var card = document.querySelector('.stock-chart-card[data-chart="' + def.name + '"]');
+
+            // 全空数据（老格式文件缺 ROE/EPS 行）→ 隐藏卡片，不进缓存/全屏循环
+            var hasData = payload && (payload.extra && payload.extra.series || []).some(function (s) {
+                return (s.data || []).some(function (v) { return v !== null && v !== undefined; });
+            });
+            if (!hasData) {
+                if (card) card.style.display = 'none';
+                delete chartDataCache[def.name];
+                return;
+            }
+            if (card) card.style.display = '';
 
             titleEl.textContent = payload.title;
             renderChart(canvas, payload, def.name);
@@ -629,6 +724,9 @@
                                 if (s && s.unit === '%') {
                                     return c.dataset.label + ': ' + (val * 100).toFixed(2) + '%';
                                 }
+                                if (s && s.unit === '元') {
+                                    return c.dataset.label + ': ' + val.toFixed(2) + ' 元';
+                                }
                                 return c.dataset.label + ': ' + val.toFixed(3) + ' 亿元';
                             }
                         }
@@ -705,16 +803,15 @@
         });
     }
 
-    // 方向键 / 翻页键在全屏中切换上一张 / 下一张图表（6 张循环回绕）
+    // 方向键 / 翻页键在全屏中切换上一张 / 下一张图表（循环回绕）
+    // 可切换集合 = 当前有数据（已缓存）的图表，隐藏的空卡片不参与循环
     function switchFullscreen(step) {
         if (fullscreenOverlay.hidden || !fullscreenCurrentName) return;
-        var idx = -1;
-        for (var i = 0; i < CHART_DEFS.length; i++) {
-            if (CHART_DEFS[i].name === fullscreenCurrentName) { idx = i; break; }
-        }
+        var order = CHART_DEFS.map(function (d) { return d.name; })
+            .filter(function (n) { return !!chartDataCache[n]; });
+        var idx = order.indexOf(fullscreenCurrentName);
         if (idx < 0) return;
-        var next = CHART_DEFS[(idx + step + CHART_DEFS.length) % CHART_DEFS.length];
-        openFullscreen(next.name);
+        openFullscreen(order[(idx + step + order.length) % order.length]);
     }
 
     function closeFullscreen() {
