@@ -412,10 +412,11 @@
                 labels: periods,
                 extra: {
                     series: [
-                        { name: '销售费用', data: col('销售费用'), type: 'bar', color: C[1] },
-                        { name: '管理费用', data: col('管理费用'), type: 'bar', color: C[2] },
-                        { name: '研发费用', data: col('研发费用'), type: 'bar', color: C[4] },
-                        { name: '净利润',   data: col('净利润'),   type: 'line', color: C[0] }
+                        // 三条费用线用高对比色相（红/绿/橙），与靛蓝柱及白底拉开距离
+                        { name: '净利润',   data: col('净利润'),   type: 'bar',  color: C[0] },
+                        { name: '销售费用', data: col('销售费用'), type: 'line', color: '#dc2626' },
+                        { name: '管理费用', data: col('管理费用'), type: 'line', color: '#059669' },
+                        { name: '研发费用', data: col('研发费用'), type: 'line', color: '#ea580c' }
                     ],
                     scales: { left: axisMoney }
                 }
