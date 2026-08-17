@@ -6,7 +6,7 @@
 import multiprocessing
 
 # 绑定地址（容器内监听所有网卡）
-bind = "0.0.0.0:8000"
+bind = "0.0.0.0:8080"
 
 # Worker 进程数（默认使用 CPU 核数，单核时设为 2）
 workers = multiprocessing.cpu_count() if multiprocessing.cpu_count() > 1 else 2

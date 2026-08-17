@@ -35,11 +35,11 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app appuser && \
 USER appuser
 
 # 暴露端口
-EXPOSE 8000
+EXPOSE 8080
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/ || exit 1
+    CMD curl -f http://localhost:8080/ || exit 1
 
 # 使用 gunicorn 启动（配置见 gunicorn.conf.py）
 CMD ["uv", "run", "gunicorn", "-c", "gunicorn.conf.py", "main:app"]
