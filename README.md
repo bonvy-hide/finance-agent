@@ -133,3 +133,114 @@ THS_COOKIE=               # 可选：登录 Cookie，提高下载成功率
 - **后端**：FastAPI + Uvicorn + openpyxl + Python >= 3.12
 - **前端**：Chart.js 4.x + chartjs-plugin-datalabels + Tailwind CSS（均 CDN 引入）
 - **包管理**：uv
+- **生产部署**：Docker + Gunicorn + Uvicorn workers
+
+## 云服务器部署（Docker）
+
+### 前置条件
+
+- 一台云服务器（阿里云 / 腾讯云等），已安装 **Docker** 和 **Docker Compose**
+- 服务器安全组已放行 **8000 端口**（入站 TCP）
+- 一个 Git 仓库地址（本项目的远程仓库）
+
+### 安装 Docker（如未安装）
+
+以 Ubuntu / Debian 为例：
+
+```bash
+# 一键安装 Docker
+curl -fsSL https://get.docker.com | sh
+
+# 将当前用户加入 docker 组（免 sudo）
+sudo usermod -aG docker $USER
+
+# 重新登录使权限生效，然后验证
+docker --version
+docker compose version
+```
+
+CentOS / 其他系统参见 [Docker 官方文档](https://docs.docker.com/engine/install/)。
+
+### 部署步骤
+
+```bash
+# 1. 克隆代码到服务器
+cd ~
+git clone https://<你的仓库地址>/finance-agent.git
+cd ~/finance-agent
+
+# 2. （可选）创建环境配置文件
+#    如需自定义同花顺接口参数，复制模板并编辑
+cp .env.example .env
+vi .env
+
+# 3. 构建镜像并启动服务（后台运行）
+docker compose up -d --build
+
+# 4. 查看启动日志，确认正常运行
+docker compose logs -f
+```
+
+启动成功后，浏览器访问：
+
+```
+http://<服务器公网IP>:8000
+```
+
+### 后续更新
+
+当仓库有新代码时，在服务器上执行：
+
+```bash
+cd ~/finance-agent
+git pull
+docker compose up -d --build
+```
+
+`docker compose up --build` 会检测 `Dockerfile` 或源码变更并重新构建镜像，然后替换旧容器启动。**无需手动停止服务**，Docker Compose 会自动处理。
+
+### 常用运维命令
+
+在 `~/finance-agent` 目录下执行：
+
+```bash
+# 查看运行状态
+docker compose ps
+
+# 查看实时日志
+docker compose logs -f
+
+# 停止服务（容器保留）
+docker compose stop
+
+# 启动已有服务
+docker compose start
+
+# 停止并删除容器（镜像保留，下次启动复用）
+docker compose down
+
+# 停止并删除容器 + 镜像（下次需重新构建）
+docker compose down --rmi local
+```
+
+### 阿里云 / 腾讯云安全组配置
+
+如果浏览器无法访问，检查云服务器安全组是否放行入站端口：
+
+| 云平台 | 设置路径 | 规则 |
+|--------|----------|------|
+| 阿里云 | ECS 控制台 → 安全组 → 入方向规则 | 授权 0.0.0.0/0，TCP，端口 8000 |
+| 腾讯云 | CVM 控制台 → 安全组 → 入站规则 | 授权 0.0.0.0/0，TCP，端口 8000 |
+
+### 架构说明
+
+```
+客户端 → :8000 → Docker 容器
+                   ├─ Gunicorn（主进程，管理 worker）
+                   └─ Uvicorn Workers × N（处理 FastAPI 请求）
+```
+
+- 使用 **Gunicorn** 多进程管理，按 CPU 核数自动配置 worker 数量
+- 使用 **非 root 用户** 运行，提高安全性
+- `.env` 文件不在镜像内，通过 `docker-compose.yml` 的 `env_file` 在运行时注入
+- 所有数据缓存在内存中，**服务重启后缓存清空**，下次请求会重新获取

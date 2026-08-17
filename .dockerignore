@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[oc]
+*.egg-info
+build/
+dist/
+wheels/
+
+# 虚拟环境
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# 开发工具
+.zcode/
+.codebuddy/
+gui-test-screenshots/
+
+# 本地环境配置（通过 docker-compose env_file 在运行时注入）
+.env
+
+# 运行时输出（不需要打包到镜像中）
+outputs/
+generated-images/
+
+# 编辑器
+.vscode/
+.idea/
+
+# 测试
+test_refactor.py
