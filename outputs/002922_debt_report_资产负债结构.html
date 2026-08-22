@@ -1,0 +1,62 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8">
+<title>资产负债结构 (2026-03-31)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+<style>
+  body{margin:0;background:#1e1e1e;color:#ddd;font-family:-apple-system,BlinkMacSystemFont,'Microsoft YaHei',sans-serif}
+  .wrap{max-width:1200px;margin:24px auto;padding:0 24px}
+  h1{font-size:18px;font-weight:500;text-align:center;margin:0 0 16px;color:#fff}
+  .legend{display:flex;gap:24px;justify-content:center;margin-bottom:12px;font-size:13px}
+  .legend i{display:inline-block;width:12px;height:12px;border-radius:2px;margin-right:6px;vertical-align:middle}
+  .asset i{background:#3a7ecf} .liab i{background:#d63031}
+  .card{background:#2a2a2a;border-radius:8px;padding:16px}
+</style></head><body>
+<div class="wrap">
+  <h1 id="t"></h1>
+  <div class="legend">
+    <span class="asset"><i></i>资产侧</span>
+    <span class="liab"><i></i>负债侧</span>
+  </div>
+  <div class="card"><canvas id="c" style="max-height:520px"></canvas></div>
+  <p style="text-align:center;color:#888;font-size:12px;margin-top:12px">
+    单位：亿元 ｜ 数据来源：用户上传 Excel ｜ 16 项按预设规则合并
+  </p>
+</div>
+<script>
+document.getElementById('t').textContent = "资产负债结构 (2026-03-31)";
+const labels = ["总现金", "应收款", "预付款", "存货", "其他流动", "长期投资", "固定资产", "无形资产", "其他固定", "短期借款", "应付款", "预收款", "薪酬&税", "其他负债", "长期借款", "其他长期"];
+const vals = [16.8373, 17.1984, 0.0929, 8.8661, 4.0931, 0.3768, 38.1462, 2.852, 1.2725, 19.7146, 18.2508, 0.702, 0.9005, 0.1834, 14.54, 1.6769];
+Chart.register(ChartDataLabels);
+new Chart(document.getElementById('c'), {
+  type:'bar', data:{ labels, datasets:[{
+    label:'金额(亿元)', data:vals,
+    backgroundColor:(ctx)=>ctx.dataIndex<9?'#3a7ecf':'#d63031',
+    borderWidth:0
+  }]},
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    layout:{padding:{top:28}},
+    plugins:{
+      legend:{display:false},
+      tooltip:{callbacks:{label:c=>c.parsed.y.toFixed(3)+' 亿元'}},
+      datalabels:{
+        anchor:'end', align:'top', offset:2,
+        color:'#fff', font:{size:11,weight:500},
+        formatter:v=>v===0?'':v.toFixed(2),
+        display:c=>vals[c.dataIndex]>0
+      }
+    },
+    scales:{
+      x:{
+        ticks:{color:'#ccc',font:{size:11},autoSkip:false,maxRotation:45,minRotation:45},
+        grid:{display:false}
+      },
+      y:{
+        beginAtZero:true, max:40.0,
+        ticks:{color:'#ccc',font:{size:11}},
+        grid:{color:'rgba(255,255,255,0.08)'}
+      }
+    }
+  }
+});
+</script></body></html>

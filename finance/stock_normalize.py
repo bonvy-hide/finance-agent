@@ -558,6 +558,8 @@ def normalize(path: Path, output_start_year: int = OUTPUT_START_YEAR) -> Normali
         "new_columns": list(SINGLE_PERIOD_NEW_COLUMNS.keys()),
         "source_file": str(path.name),
         "raw_period_count": len(periods),
+        # 口径标记：True=单季值（新版在线导出），False=年初至今累计值（老格式上传）
+        "quarterly": _detect_quarterly(data, periods),
     }
 
     return NormalizedData(

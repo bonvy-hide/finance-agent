@@ -375,45 +375,60 @@
         var axisMoney = { title: '亿元' };
         var axisPct = { title: '毛利率', unit: '%' };
 
-        // ── ROE 年度聚合：TTM ROE（滚动 4 季和）+ 同比增长率 ──
+        // ── ROE 年度聚合：TTM ROE + 同比增长率 ──
         var roeRaw = ratio('净资产收益率');
+        // 口径标记（服务端 meta.quarterly）：true=单季值（新版在线导出），
+        // false/缺失=年初至今累计值（老格式上传）
+        var roeQuarterly = !!(data.meta && data.meta.quarterly);
+        // 累计口径下用 滚动净利润/归母净资产 求 TTM ROE（col() 同除 1e8，比值不受影响）
+        var roeTtmProfit = col('滚动净利润');
+        var roeEquity = col('归母净资产');
         // 报告期(YYYY-MM-DD 季末) → 全局季度序号 qi = 年×4+(季度-1)
         function quarterIndexOf(p) {
             var m = /^(\d{4})-(\d{2})-/.exec(p);
             if (!m) return null;
             return parseInt(m[1], 10) * 4 + (Math.ceil(parseInt(m[2], 10) / 3) - 1);
         }
-        var roePts = [];  // {qi, v}（按 periods 升序、非空）
+        var roePts = [];  // {qi, v, i}（按 periods 升序、非空，i 为期索引）
         periods.forEach(function (p, i) {
             var qi = quarterIndexOf(p);
             if (qi !== null && roeRaw[i] !== null && roeRaw[i] !== undefined) {
-                roePts.push({ qi: qi, v: roeRaw[i] });
+                roePts.push({ qi: qi, v: roeRaw[i], i: i });
             }
         });
-        // 各点滚动 TTM：前推 3 个日历连续季度齐全才可算
+        // 各点滚动 TTM：
+        // - 单季口径：前推 3 个日历连续季度齐全才可算（4 季 ROE 求和）
+        // - 累计口径：滚动净利润 / 归母净资产（年报期即全年净利润/年末净资产）。
+        //   累计 ROE 值直接相加会高估数倍，不可用
         var roeTTM = roePts.map(function (pt, i) {
-            var sum = pt.v;
-            for (var j = 1; j <= 3; j++) {
-                var prev = roePts[i - j];
-                if (!prev || prev.qi !== pt.qi - j) return null;
-                sum += prev.v;
+            if (roeQuarterly) {
+                var sum = pt.v;
+                for (var j = 1; j <= 3; j++) {
+                    var prev = roePts[i - j];
+                    if (!prev || prev.qi !== pt.qi - j) return null;
+                    sum += prev.v;
+                }
+                return sum;
             }
-            return sum;
+            var np = roeTtmProfit[pt.i];
+            var eq = roeEquity[pt.i];
+            return (np !== null && np !== undefined && eq !== null && eq !== undefined && eq !== 0)
+                ? np / eq : null;
         });
-        // 每年取最后一个可用点：TTM 可算用 TTM（完整年=该年 4 季和），
-        // 不可算（如年报期单点/早年缺季）退化为该点原值
-        var yearLast = {};   // 年份字符串 -> {v, ttm}
+        // 每年取最后一个可用点的 TTM。TTM 不可算（如不完整年仅 1-3 个季度）时
+        // 该年不出柱、同比留空 — 不退化为单季值冒充 TTM（会产生虚假的大幅同比下滑）
+        var yearLast = {};   // 年份字符串 -> {ttm}
         roePts.forEach(function (pt, i) {
-            yearLast[String(Math.floor(pt.qi / 4))] = { v: pt.v, ttm: roeTTM[i] };
+            yearLast[String(Math.floor(pt.qi / 4))] = { ttm: roeTTM[i] };
         });
         var roeYears = Object.keys(yearLast).sort();
         var roeBars = [], roeYoY = [];
         roeYears.forEach(function (y, idx) {
-            var last = yearLast[y];
-            var val = (last.ttm !== null && last.ttm !== undefined) ? last.ttm : last.v;
+            var val = yearLast[y].ttm;
             roeBars.push(val);
             var prevVal = idx > 0 ? roeBars[idx - 1] : null;
-            roeYoY.push(idx > 0 && prevVal ? (val - prevVal) / Math.abs(prevVal) : null);
+            roeYoY.push(idx > 0 && prevVal && val !== null && val !== undefined
+                ? (val - prevVal) / Math.abs(prevVal) : null);
         });
 
         // ── EPS 同比：单季 EPS 与去年同季比较 ──

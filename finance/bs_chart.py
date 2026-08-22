@@ -63,7 +63,7 @@ DEFAULT_RULES = {
     "其他负债":    ["其他流动负债", "应付手续费及佣金", "代理买卖证券款", "代理承销证券款"],
     "长期借款":    ["长期借款", "应付债券", "租赁负债"],
     "其他长期":    ["长期应付款合计", "长期应付款", "递延所得税负债",
-                  "递延收益-非流动负债", "递延收益", "预计负债"],
+                  "递延收益-非流动负债", "递延收益", "预计负债", "其他非流动负债"],
 }
 
 # 字段名清洗：去掉"(元)"、"(亿元)"、全角括号、空格
@@ -234,8 +234,10 @@ def read_bs(path: Path, unit_hint: str = "auto") -> dict:
 def apply_rules(bs: dict, rules: dict, prefer_precomputed: bool = True) -> dict:
     """
     按 rules 把原始行项目合并为 16 项。
-    prefer_precomputed=True 时，对每个分组，按 Excel 中是否已有
-    「精确匹配」的「预计算总计行」优先（字段名 = 分组名 + 后缀）。
+
+    求和优先：先对源科目求和（"及"类合并科目替代其自身组成部分）；
+    仅当求和为 0（源科目全部缺失/为零）时，才兜底使用 Excel 中与分组名
+    精确同名的「预计算总计行」（字段名 = 分组名 + 可选单位后缀）。
     """
     # 索引：清洗后的字段名 → 数值
     raw_index = {lab_n: v for _, lab_n, v in bs["rows"]}
@@ -244,8 +246,9 @@ def apply_rules(bs: dict, rules: dict, prefer_precomputed: bool = True) -> dict:
 
     def find_val(candidates: list[str]) -> float:
         """求值策略：
-        1) 优先尝试「含'及'的合并科目」— 找到就用它独立值（避免应收票据及应收账款 + 应收账款子项双重计算）
-        2) 否则把能匹配到的源字段求和（按 norm 名去重防重复加）
+        1) 含"及"的合并科目（如 应收票据及应收账款）优先 — 用它替代自身的
+           组成部分（按名称拆"及"），避免与子项双重计算；
+        2) 其余未被覆盖的源字段独立累加（按 norm 名去重防重复加）
         """
         seen = set()
         uniq = []
@@ -255,23 +258,25 @@ def apply_rules(bs: dict, rules: dict, prefer_precomputed: bool = True) -> dict:
             seen.add(cn)
             uniq.append(cn)
 
-        # Phase 1：合并科目（含 "及"）优先
+        total = 0.0
+        covered: set[str] = set()   # 已被"及"合并科目覆盖的组成部分名
         for cn in uniq:
             if cn in raw_index and "及" in cn:
-                return raw_index[cn]
-
-        # Phase 2：独立加总
-        return sum(raw_index.get(cn, 0) for cn in uniq)
+                total += raw_index[cn]
+                covered.update(p for p in cn.split("及") if p)
+        for cn in uniq:
+            if cn in covered or (cn in raw_index and "及" in cn):
+                continue
+            total += raw_index.get(cn, 0)
+        return total
 
     result = {}
     for grp_name, sources in rules.items():
-        if prefer_precomputed:
-            # 仅匹配「分组名」本身或带单位后缀 — 不含「合计」之类的子项
-            precomputed = find_val([grp_name, grp_name + "(元)", grp_name + "(亿元)"])
-            if precomputed > 0:
-                result[grp_name] = precomputed
-                continue
-        result[grp_name] = find_val(sources)
+        merged = find_val(sources)
+        if merged == 0 and prefer_precomputed:
+            # 兜底：源科目全部缺失/为零时，才使用表内与分组名同名的预计算行
+            merged = find_val([grp_name, grp_name + "(元)", grp_name + "(亿元)"])
+        result[grp_name] = merged
     return result
 
 

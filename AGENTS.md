@@ -39,5 +39,6 @@ Key patterns:
 ## Gotchas
 
 - Windows is the primary dev environment; CLI `__main__` blocks reconfigure stdout to UTF-8 to avoid GBK encoding errors — keep that when editing
-- Excel parsing auto-detects header rows/period columns; balance-sheet merge rules (`DEFAULT_RULES` in `finance/bs_chart.py`) prioritize pre-computed summary rows to avoid double-counting — don't reorder casually
+- Excel parsing auto-detects header rows/period columns; balance-sheet merge rules (`DEFAULT_RULES` in `finance/bs_chart.py`) sum source accounts first ("及"-named merged accounts replace only their own constituents) and only fall back to a same-named pre-computed row when the sum is 0 — don't reorder casually
+- Stock normalize output carries `meta.quarterly` (True=single-quarter caliber, False=YTD cumulative); frontend ROE math switches on it — cumulative ROE values must never be summed as TTM
 - Frontend has no bundler; CDN library versions are pinned in `static/index.html`
